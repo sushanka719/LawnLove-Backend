@@ -14,6 +14,9 @@ export const envSchema = z.object({
   SENTRY_DSN: z.string().url().optional(),
   THROTTLE_TTL: z.coerce.number().int().positive().default(60000),
   THROTTLE_LIMIT: z.coerce.number().int().positive().default(100),
+  RESEND_API_KEY: z.string(),
+  GOOGLE_CLIENT_ID: z.string(),
+  GOOGLE_CLIENT_SECRET: z.string(),
 });
 
 export type Env = z.infer<typeof envSchema>;
