@@ -36,6 +36,18 @@ export class AppConfigService {
     return this.configService.get('THROTTLE_LIMIT', { infer: true });
   }
 
+  get resendApiKey() {
+    return this.configService.get('RESEND_API_KEY', { infer: true });
+  }
+
+  get googleClientId() {
+    return this.configService.get('GOOGLE_CLIENT_ID', { infer: true });
+  }
+
+  get googleClientSecret() {
+    return this.configService.get('GOOGLE_CLIENT_SECRET', { infer: true });
+  }
+
   get isProduction() {
     return this.nodeEnv === 'production';
   }
