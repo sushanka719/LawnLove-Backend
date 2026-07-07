@@ -21,6 +21,7 @@ COPY --from=build /app/generated ./generated
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY package.json ./
+COPY prisma.config.ts ./
 COPY docker-entrypoint.sh ./
 
 USER app
