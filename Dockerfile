@@ -21,6 +21,7 @@ COPY --from=build /app/generated ./generated
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY package.json ./
+COPY docker-entrypoint.sh ./
 
 USER app
 EXPOSE 4000
@@ -28,4 +29,5 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "require('http').get('http://localhost:'+(process.env.PORT||3000)+'/health', res => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
+ENTRYPOINT ["sh", "docker-entrypoint.sh"]
 CMD ["node", "dist/src/main.js"]
