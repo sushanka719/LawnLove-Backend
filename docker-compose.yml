@@ -22,7 +22,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://postgres:postgres@db:5432/lawn
+      DATABASE_URL: postgres://postgres:UWhCuyqKcOtJPuA7NFcCES6K70vRoDXqIUAjb9lb69h2OoiFcBbIRh5Mb91raOiK@d13o1o7zw8s9xkcvcvri14qg:5432/postgres
     ports:
       - '3000:3000'
     depends_on:
