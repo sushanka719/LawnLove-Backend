@@ -66,6 +66,19 @@ export const auth = betterAuth({
       secure: true,
     },
   },
+  // better-auth's default is 3 requests / 10s on auth-sensitive paths, which
+  // is too strict for real usage (page reloads, OAuth redirect round-trips,
+  // multiple people testing behind the same NAT'd IP). Loosen it here while
+  // still meaningfully rate-limiting brute-force attempts.
+  rateLimit: {
+    customRules: {
+      '/sign-in/*': { window: 60, max: 20 },
+      '/sign-up': { window: 60, max: 20 },
+      '/callback/*': { window: 60, max: 20 },
+      '/change-password': { window: 60, max: 20 },
+      '/change-email': { window: 60, max: 20 },
+    },
+  },
   emailAndPassword: {
     enabled: true,
     sendResetPassword: async ({ user, url }) => {
