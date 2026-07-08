@@ -8,6 +8,24 @@ import {
   sendResetPasswordEmail,
 } from '../mail/mail.service';
 import { PrismaClient } from '../../generated/prisma/client';
+import {
+  collapseSpaces,
+  EMAIL_MAX,
+  EMAIL_MESSAGE,
+  EMAIL_REGEX,
+  NAME_MAX,
+  NAME_MESSAGE,
+  NAME_MIN,
+  NAME_REGEX,
+  PASSWORD_MAX,
+  PASSWORD_MESSAGE,
+  PASSWORD_MIN,
+  PASSWORD_REGEX,
+  USERNAME_MAX,
+  USERNAME_MESSAGE,
+  USERNAME_MIN,
+  USERNAME_REGEX,
+} from './validation.constants';
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
@@ -25,21 +43,67 @@ const prisma = new PrismaClient({
 const pendingUsernameIdentifier = (email: string) =>
   `magic-link-username:${email}`;
 
-const USERNAME_REGEX = /^[a-zA-Z0-9_.]+$/;
-
 function normalizeUsername(rawUsername: string) {
   const displayUsername = rawUsername;
   const normalized = rawUsername.toLowerCase();
   if (
-    normalized.length < 3 ||
-    normalized.length > 30 ||
-    !USERNAME_REGEX.test(normalized)
+    normalized.length < USERNAME_MIN ||
+    normalized.length > USERNAME_MAX ||
+    !USERNAME_REGEX.test(normalized) ||
+    normalized.includes('..') ||
+    normalized.includes('__')
   ) {
     throw new APIError('UNPROCESSABLE_ENTITY', {
-      message: 'Invalid username',
+      message: USERNAME_MESSAGE,
     });
   }
   return { username: normalized, displayUsername };
+}
+
+function validateName(rawName: unknown) {
+  if (typeof rawName !== 'string') {
+    throw new APIError('UNPROCESSABLE_ENTITY', { message: NAME_MESSAGE });
+  }
+  const name = collapseSpaces(rawName);
+  if (
+    name.length < NAME_MIN ||
+    name.length > NAME_MAX ||
+    !NAME_REGEX.test(name)
+  ) {
+    throw new APIError('UNPROCESSABLE_ENTITY', { message: NAME_MESSAGE });
+  }
+  return name;
+}
+
+function validateEmail(rawEmail: unknown) {
+  if (typeof rawEmail !== 'string') {
+    throw new APIError('UNPROCESSABLE_ENTITY', { message: EMAIL_MESSAGE });
+  }
+  const email = rawEmail.trim();
+  if (
+    email.length > EMAIL_MAX ||
+    email.includes(' ') ||
+    email.includes('..') ||
+    !EMAIL_REGEX.test(email)
+  ) {
+    throw new APIError('UNPROCESSABLE_ENTITY', { message: EMAIL_MESSAGE });
+  }
+  return email;
+}
+
+function validatePassword(rawPassword: unknown) {
+  if (typeof rawPassword !== 'string') {
+    throw new APIError('UNPROCESSABLE_ENTITY', { message: PASSWORD_MESSAGE });
+  }
+  const password = rawPassword.trim();
+  if (
+    password.length < PASSWORD_MIN ||
+    password.length > PASSWORD_MAX ||
+    !PASSWORD_REGEX.test(password)
+  ) {
+    throw new APIError('UNPROCESSABLE_ENTITY', { message: PASSWORD_MESSAGE });
+  }
+  return password;
 }
 
 export const auth = betterAuth({
@@ -81,6 +145,8 @@ export const auth = betterAuth({
   },
   emailAndPassword: {
     enabled: true,
+    minPasswordLength: PASSWORD_MIN,
+    maxPasswordLength: PASSWORD_MAX,
     sendResetPassword: async ({ user, url }) => {
       await sendResetPasswordEmail(user.email, url);
     },
@@ -100,19 +166,47 @@ export const auth = betterAuth({
   },
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
-      if (ctx.path !== '/sign-in/magic-link') return;
-      const body = ctx.body as {
-        email: string;
-        metadata?: { username?: string };
-      };
-      const requestedUsername = body.metadata?.username;
-      if (!requestedUsername) return;
-      const normalized = normalizeUsername(requestedUsername);
-      await ctx.context.internalAdapter.createVerificationValue({
-        identifier: pendingUsernameIdentifier(body.email),
-        value: JSON.stringify(normalized),
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-      });
+      if (ctx.path === '/sign-in/magic-link') {
+        const body = ctx.body as {
+          email: string;
+          name?: string;
+          metadata?: { username?: string };
+        };
+        validateEmail(body.email);
+        if (body.name !== undefined) validateName(body.name);
+        // This endpoint is only ever used by the signup form in this app
+        // (login uses email+password) — so an email that already has a
+        // password credential means the visitor already has an account.
+        // Without this check, the magic-link verify step silently logs
+        // them into that existing account instead of signaling "you
+        // already have an account, sign in instead."
+        const existingCredential = await prisma.account.findFirst({
+          where: {
+            providerId: 'credential',
+            password: { not: null },
+            user: { email: body.email },
+          },
+        });
+        if (existingCredential) {
+          throw new APIError('CONFLICT', {
+            message:
+              'An account with this email already exists. Please sign in instead.',
+          });
+        }
+        const requestedUsername = body.metadata?.username;
+        if (!requestedUsername) return;
+        const normalized = normalizeUsername(requestedUsername);
+        await ctx.context.internalAdapter.createVerificationValue({
+          identifier: pendingUsernameIdentifier(body.email),
+          value: JSON.stringify(normalized),
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        });
+        return;
+      }
+      if (ctx.path === '/reset-password') {
+        const body = ctx.body as { newPassword: string };
+        validatePassword(body.newPassword);
+      }
     }),
   },
   databaseHooks: {
