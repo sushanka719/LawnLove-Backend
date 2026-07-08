@@ -55,6 +55,17 @@ export const auth = betterAuth({
   trustedOrigins: process.env.CORS_ORIGIN?.split(',')
     .map((origin) => origin.trim())
     .filter(Boolean),
+  // Frontend (vercel.app) and backend (gettola.app) are cross-site, not just
+  // cross-origin subdomains. SameSite=Lax (the default) drops cookies set
+  // during the initial cross-site fetch to /sign-in/social, which breaks the
+  // OAuth state-cookie check on callback (`state_mismatch`) and would equally
+  // break the session cookie for any cross-site fetch-based auth call.
+  advanced: {
+    defaultCookieAttributes: {
+      sameSite: 'none',
+      secure: true,
+    },
+  },
   emailAndPassword: {
     enabled: true,
     sendResetPassword: async ({ user, url }) => {
