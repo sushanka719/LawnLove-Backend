@@ -106,6 +106,8 @@ function validatePassword(rawPassword: unknown) {
   return password;
 }
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 export const auth = betterAuth({
   database: prismaAdapter(prisma, {
     provider: 'postgresql',
@@ -122,24 +124,36 @@ export const auth = betterAuth({
   // SameSite=Lax (the default) drops cookies set during the initial
   // cross-site fetch to /sign-in/social, which breaks the OAuth state-cookie
   // check on callback (`state_mismatch`) and would equally break the session
-  // cookie for any cross-site fetch-based auth call.
+  // cookie for any cross-site fetch-based auth call. Only applied in
+  // production — on localhost the frontend and backend share the exact same
+  // host (just different ports), so this isn't needed there, and a cookie
+  // scoped to `.gettola.app` would be rejected outright on localhost.
   //
-  // Frontend and backend are on different subdomains of the shared gettola.app
-  // registrable domain (e.g. staging.lawnlove.gettola.app vs
-  // backend.lawn.gettola.app), so without crossSubDomainCookies the session
-  // cookie defaults to host-only and is scoped strictly to
-  // backend.lawn.gettola.app — the frontend's own server (e.g. its
-  // middleware/proxy checking auth) never receives it. Setting `domain` to
-  // the shared parent makes the cookie visible to any gettola.app subdomain.
+  // cookiePrefix is set to something app-specific rather than the
+  // better-auth default ("better-auth") because crossSubDomainCookies shares
+  // this cookie across every gettola.app subdomain — if another subdomain
+  // also runs better-auth with the default prefix, its same-named cookie
+  // would collide with (and silently clobber) this one.
   advanced: {
-    defaultCookieAttributes: {
-      sameSite: 'none',
-      secure: true,
-    },
-    crossSubDomainCookies: {
-      enabled: true,
-      domain: '.gettola.app',
-    },
+    cookiePrefix: 'lawnlove',
+    ...(isProduction && {
+      defaultCookieAttributes: {
+        sameSite: 'none' as const,
+        secure: true,
+      },
+      // Frontend and backend are on different subdomains of the shared
+      // gettola.app registrable domain (e.g. staging.lawnlove.gettola.app vs
+      // backend.lawn.gettola.app), so without crossSubDomainCookies the
+      // session cookie defaults to host-only and is scoped strictly to
+      // backend.lawn.gettola.app — the frontend's own server (e.g. its
+      // proxy/middleware checking auth) never receives it. Setting `domain`
+      // to the shared parent makes the cookie visible to any gettola.app
+      // subdomain.
+      crossSubDomainCookies: {
+        enabled: true,
+        domain: '.gettola.app',
+      },
+    }),
   },
   // better-auth's default is 3 requests / 10s on auth-sensitive paths, which
   // is too strict for real usage (page reloads, OAuth redirect round-trips,
