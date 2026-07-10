@@ -119,15 +119,26 @@ export const auth = betterAuth({
   trustedOrigins: process.env.CORS_ORIGIN?.split(',')
     .map((origin) => origin.trim())
     .filter(Boolean),
-  // Frontend (vercel.app) and backend (gettola.app) are cross-site, not just
-  // cross-origin subdomains. SameSite=Lax (the default) drops cookies set
-  // during the initial cross-site fetch to /sign-in/social, which breaks the
-  // OAuth state-cookie check on callback (`state_mismatch`) and would equally
-  // break the session cookie for any cross-site fetch-based auth call.
+  // SameSite=Lax (the default) drops cookies set during the initial
+  // cross-site fetch to /sign-in/social, which breaks the OAuth state-cookie
+  // check on callback (`state_mismatch`) and would equally break the session
+  // cookie for any cross-site fetch-based auth call.
+  //
+  // Frontend and backend are on different subdomains of the shared gettola.app
+  // registrable domain (e.g. staging.lawnlove.gettola.app vs
+  // backend.lawn.gettola.app), so without crossSubDomainCookies the session
+  // cookie defaults to host-only and is scoped strictly to
+  // backend.lawn.gettola.app — the frontend's own server (e.g. its
+  // middleware/proxy checking auth) never receives it. Setting `domain` to
+  // the shared parent makes the cookie visible to any gettola.app subdomain.
   advanced: {
     defaultCookieAttributes: {
       sameSite: 'none',
       secure: true,
+    },
+    crossSubDomainCookies: {
+      enabled: true,
+      domain: '.gettola.app',
     },
   },
   // better-auth's default is 3 requests / 10s on auth-sensitive paths, which
