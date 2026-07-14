@@ -14,17 +14,19 @@ datasource db {
 }
 
 model User {
-  id              String    @id
-  name            String
-  username        String?
-  displayUsername String?
-  email           String
-  emailVerified   Boolean   @default(false)
-  image           String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  sessions        Session[]
-  accounts        Account[]
+  id               String    @id
+  name             String
+  username         String?
+  displayUsername  String?
+  email            String
+  emailVerified    Boolean   @default(false)
+  image            String?
+  stripeCustomerId String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  sessions         Session[]
+  accounts         Account[]
+  bookings         Booking[]
 
   @@unique([email])
   @@unique([username])
@@ -77,4 +79,51 @@ model Verification {
 
   @@index([identifier])
   @@map("verification")
+}
+
+enum BookingFrequency {
+  weekly
+  biweekly
+  monthly
+  oneTime
+}
+
+enum BookingTimeSlot {
+  morning
+  midday
+  afternoon
+  evening
+}
+
+enum BookingStatus {
+  scheduled
+  cancelled
+  completed
+}
+
+model Booking {
+  id                    String           @id @default(cuid())
+  userId                String
+  user                  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone                 String
+  address               String
+  lat                   Float?
+  lng                   Float?
+  boundary              Json
+  areaSqFt              Int
+  estimatedAreaSqFt     Int
+  frequency             BookingFrequency
+  subtotal              Int
+  discountPct           Float
+  totalPerVisit         Int
+  scheduleDate          DateTime
+  timeSlot              BookingTimeSlot
+  stripeCustomerId      String
+  stripePaymentMethodId String
+  status                BookingStatus    @default(scheduled)
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  @@index([userId])
+  @@map("booking")
 }

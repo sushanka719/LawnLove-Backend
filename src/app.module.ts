@@ -7,6 +7,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { auth } from './auth/auth';
 import { SetPasswordController } from './auth/set-password.controller';
+import { BookingModule } from './booking/booking.module';
 import { AppConfigModule } from './config/config.module';
 import { AppConfigService } from './config/config.service';
 import { HealthModule } from './health/health.module';
@@ -24,6 +25,7 @@ import { PrismaModule } from './prisma/prisma.module';
     }),
     PrismaModule,
     HealthModule,
+    BookingModule,
     AuthModule.forRoot({
       auth,
     }),
