@@ -48,6 +48,10 @@ export class AppConfigService {
     return this.configService.get('GOOGLE_CLIENT_SECRET', { infer: true });
   }
 
+  get stripeSecretKey() {
+    return this.configService.get('STRIPE_SECRET_KEY', { infer: true });
+  }
+
   get isProduction() {
     return this.nodeEnv === 'production';
   }
