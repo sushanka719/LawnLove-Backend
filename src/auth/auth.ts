@@ -31,6 +31,17 @@ const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 });
 
+// The cross-subdomain / SameSite=None / Secure cookie config below only works
+// for the deployed gettola.app subdomains over HTTPS. Locally the frontend
+// (localhost:3000) and backend (localhost:4000) share the `localhost` site
+// (ports don't affect SameSite) over plain HTTP, so applying it makes the
+// browser drop cookies: `Domain=.gettola.app` doesn't match `localhost`, so the
+// OAuth `state` cookie is discarded and the callback fails with `state_mismatch`.
+// Gate on NODE_ENV (read from the raw environment here because this module is
+// constructed before Nest's ConfigService is available). Defaults to the local
+// config when unset, so production must explicitly set NODE_ENV=production.
+const isProduction = process.env.NODE_ENV === 'production';
+
 // The magic-link plugin's stored verification token only carries
 // `email`/`name` through to `/magic-link/verify` — `metadata` never
 // survives past the initial `signInMagicLink` call. We stash the
@@ -131,16 +142,25 @@ export const auth = betterAuth({
   // backend.lawn.gettola.app — the frontend's own server (e.g. its
   // middleware/proxy checking auth) never receives it. Setting `domain` to
   // the shared parent makes the cookie visible to any gettola.app subdomain.
-  advanced: {
-    defaultCookieAttributes: {
-      sameSite: 'none',
-      secure: true,
-    },
-    crossSubDomainCookies: {
-      enabled: true,
-      domain: '.gettola.app',
-    },
-  },
+  advanced: isProduction
+    ? {
+        defaultCookieAttributes: {
+          sameSite: 'none',
+          secure: true,
+        },
+        crossSubDomainCookies: {
+          enabled: true,
+          domain: '.gettola.app',
+        },
+      }
+    : {
+        // localhost is same-site across ports and served over HTTP, so a
+        // host-only Lax cookie is both sufficient and required to work.
+        defaultCookieAttributes: {
+          sameSite: 'lax',
+          secure: false,
+        },
+      },
   // better-auth's default is 3 requests / 10s on auth-sensitive paths, which
   // is too strict for real usage (page reloads, OAuth redirect round-trips,
   // multiple people testing behind the same NAT'd IP). Loosen it here while
