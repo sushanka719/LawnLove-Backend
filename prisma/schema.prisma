@@ -14,19 +14,29 @@ datasource db {
 }
 
 model User {
-  id               String    @id
-  name             String
-  username         String?
-  displayUsername  String?
-  email            String
-  emailVerified    Boolean   @default(false)
-  image            String?
-  stripeCustomerId String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
-  sessions         Session[]
-  accounts         Account[]
-  bookings         Booking[]
+  id                     String    @id
+  name                   String
+  username               String?
+  displayUsername        String?
+  email                  String
+  emailVerified          Boolean   @default(false)
+  image                  String?
+  stripeCustomerId       String?
+  // better-auth `admin` plugin fields — the plugin reads/writes all of these,
+  // so they must exist even though we only actively use `role`.
+  role                   String    @default("user")
+  banned                 Boolean   @default(false)
+  banReason              String?
+  banExpires             DateTime?
+  // Stripe Connect (Express) — set once an agent onboards for payouts.
+  stripeConnectAccountId String?
+  payoutsEnabled         Boolean   @default(false)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  sessions               Session[]
+  accounts               Account[]
+  bookings               Booking[]
+  jobs                   Job[]     @relation("AgentJobs")
 
   @@unique([email])
   @@unique([username])
@@ -43,6 +53,8 @@ model Session {
   userAgent String?
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Required by the better-auth `admin` plugin (impersonation support).
+  impersonatedBy String?
 
   @@unique([token])
   @@index([userId])
@@ -123,7 +135,83 @@ model Booking {
   status                BookingStatus    @default(scheduled)
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
+  jobs                  Job[]
 
   @@index([userId])
   @@map("booking")
+}
+
+enum JobStatus {
+  assigned
+  started
+  completed
+  in_review
+  released
+  paid
+  disputed
+  refunded
+}
+
+enum PhotoType {
+  before
+  after
+}
+
+// A Job is one service visit under a Booking. One-time bookings get a single
+// Job; recurring bookings get one Job per visit (auto-generation of future
+// visits is out of scope — the first Job is created at booking time).
+model Job {
+  id                    String     @id @default(cuid())
+  bookingId             String
+  booking               Booking    @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  agentId               String?
+  agent                 User?      @relation("AgentJobs", fields: [agentId], references: [id])
+  status                JobStatus  @default(assigned)
+  startedAt             DateTime?
+  completedAt           DateTime?
+  startLat              Float?
+  startLng              Float?
+  reviewDeadline        DateTime?
+  // Escrow money fields (cents). Set when the customer is charged at completion.
+  amount                Int?
+  platformFee           Int?
+  stripePaymentIntentId String?
+  stripeTransferId      String?
+  chargedAt             DateTime?
+  releasedAt            DateTime?
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+  photos                JobPhoto[]
+  review                Review?
+
+  @@index([bookingId])
+  @@index([agentId])
+  @@index([status])
+  @@map("job")
+}
+
+model JobPhoto {
+  id         String    @id @default(cuid())
+  jobId      String
+  job        Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  type       PhotoType
+  storageKey String
+  lat        Float?
+  lng        Float?
+  takenAt    DateTime
+  createdAt  DateTime  @default(now())
+
+  @@index([jobId])
+  @@map("job_photo")
+}
+
+model Review {
+  id        String   @id @default(cuid())
+  jobId     String   @unique
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now())
+
+  @@map("review")
 }
