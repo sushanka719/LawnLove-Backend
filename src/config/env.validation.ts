@@ -29,6 +29,10 @@ export const envSchema = z.object({
   R2_ACCESS_KEY_ID: z.string().optional(),
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   R2_BUCKET: z.string().optional(),
+  // Public base URL for the R2 bucket (r2.dev dev URL or a custom domain), used
+  // to build directly-viewable URLs for profile avatars. Optional so the app
+  // boots before it's set; the avatar upload endpoint errors clearly if unset.
+  R2_PUBLIC_URL: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

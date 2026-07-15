@@ -21,6 +21,7 @@ model User {
   email                  String
   emailVerified          Boolean   @default(false)
   image                  String?
+  phoneNumber            String?
   stripeCustomerId       String?
   // better-auth `admin` plugin fields — the plugin reads/writes all of these,
   // so they must exist even though we only actively use `role`.
