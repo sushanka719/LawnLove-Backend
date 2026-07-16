@@ -2,7 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
-import { magicLink, username } from 'better-auth/plugins';
+import { admin, magicLink, username } from 'better-auth/plugins';
 import {
   sendMagicLinkEmail,
   sendResetPasswordEmail,
@@ -270,5 +270,10 @@ export const auth = betterAuth({
       disableSignUp: false,
     }),
     username(),
+    // Adds `user.role` (default "user") and exposes it on the session so
+    // nestjs-better-auth's @Roles(['agent'|'admin']) guard can gate routes.
+    // The role/banned/banExpires/impersonatedBy columns it needs are in the
+    // Prisma schema (migration add_roles_and_connect).
+    admin(),
   ],
 });

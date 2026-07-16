@@ -52,6 +52,30 @@ export class AppConfigService {
     return this.configService.get('STRIPE_SECRET_KEY', { infer: true });
   }
 
+  get appUrl() {
+    return this.configService.get('APP_URL', { infer: true });
+  }
+
+  get platformFeePct() {
+    return this.configService.get('PLATFORM_FEE_PCT', { infer: true });
+  }
+
+  get r2Endpoint() {
+    return this.configService.get('R2_ENDPOINT', { infer: true });
+  }
+
+  get r2AccessKeyId() {
+    return this.configService.get('R2_ACCESS_KEY_ID', { infer: true });
+  }
+
+  get r2SecretAccessKey() {
+    return this.configService.get('R2_SECRET_ACCESS_KEY', { infer: true });
+  }
+
+  get r2Bucket() {
+    return this.configService.get('R2_BUCKET', { infer: true });
+  }
+
   get isProduction() {
     return this.nodeEnv === 'production';
   }
