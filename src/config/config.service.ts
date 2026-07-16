@@ -76,6 +76,10 @@ export class AppConfigService {
     return this.configService.get('R2_BUCKET', { infer: true });
   }
 
+  get r2PublicUrl() {
+    return this.configService.get('R2_PUBLIC_URL', { infer: true });
+  }
+
   get isProduction() {
     return this.nodeEnv === 'production';
   }
