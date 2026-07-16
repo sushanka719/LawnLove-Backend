@@ -1,11 +1,18 @@
 import { Module } from '@nestjs/common';
+import { PayoutModule } from '../payout/payout.module';
+import { StorageModule } from '../storage/storage.module';
 import { StripeModule } from '../stripe/stripe.module';
 import { BookingController } from './booking.controller';
 import { BookingService } from './booking.service';
+import { BookingJobsController } from './booking-jobs.controller';
+import { BookingJobsService } from './booking-jobs.service';
 
 @Module({
-  imports: [StripeModule],
-  controllers: [BookingController],
-  providers: [BookingService],
+  imports: [StripeModule, StorageModule, PayoutModule],
+  // BookingJobsController MUST come first: its concrete `bookings/jobs` routes
+  // have to be registered before BookingController's `bookings/:id`, or `:id`
+  // would swallow `/bookings/jobs` (matching id="jobs").
+  controllers: [BookingJobsController, BookingController],
+  providers: [BookingService, BookingJobsService],
 })
 export class BookingModule {}

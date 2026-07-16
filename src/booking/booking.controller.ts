@@ -1,8 +1,9 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { Session } from '@thallesp/nestjs-better-auth';
 import { auth } from '../auth/auth';
 import { BookingService } from './booking.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
+import { ListBookingsDto } from './dto/list-bookings.dto';
 
 type AuthSession = typeof auth.$Infer.Session;
 
@@ -24,5 +25,31 @@ export class BookingController {
     @Body() dto: CreateBookingDto,
   ) {
     return this.bookingService.createBooking(session.user, dto);
+  }
+
+  @Get()
+  listBookings(
+    @Session() session: AuthSession,
+    @Query() query: ListBookingsDto,
+  ) {
+    return this.bookingService.listBookings(session.user.id, query);
+  }
+
+  @Get('invoices')
+  listInvoices(
+    @Session() session: AuthSession,
+    @Query() query: ListBookingsDto,
+  ) {
+    return this.bookingService.listInvoices(session.user.id, query);
+  }
+
+  // NOTE: `GET /bookings/:id` overlaps concrete routes — `:id` would capture
+  // "jobs" (jobs controller) or "invoices" (above). Declaration/registration
+  // order matters: `invoices` is declared before this, and BookingJobsController
+  // is registered before this controller in booking.module.ts, so the concrete
+  // routes always win. Keep `:id` LAST.
+  @Get(':id')
+  getBooking(@Param('id') id: string, @Session() session: AuthSession) {
+    return this.bookingService.getBooking(id, session.user.id);
   }
 }
