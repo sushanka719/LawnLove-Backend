@@ -2,7 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
-import { magicLink, username } from 'better-auth/plugins';
+import { admin, bearer, magicLink, username } from 'better-auth/plugins';
 import {
   sendMagicLinkEmail,
   sendResetPasswordEmail,
@@ -13,6 +13,9 @@ import {
   EMAIL_MAX,
   EMAIL_MESSAGE,
   EMAIL_REGEX,
+  FULL_NAME_MAX,
+  FULL_NAME_MESSAGE,
+  FULL_NAME_MIN,
   NAME_MAX,
   NAME_MESSAGE,
   NAME_MIN,
@@ -21,6 +24,9 @@ import {
   PASSWORD_MESSAGE,
   PASSWORD_MIN,
   PASSWORD_REGEX,
+  PHONE_MESSAGE,
+  PHONE_REGEX,
+  stripPhoneSeparators,
   USERNAME_MAX,
   USERNAME_MESSAGE,
   USERNAME_MIN,
@@ -84,6 +90,38 @@ function validateName(rawName: unknown) {
     throw new APIError('UNPROCESSABLE_ENTITY', { message: NAME_MESSAGE });
   }
   return name;
+}
+
+// Profile "Full Name" — stricter 3-char minimum than the auth `name` above.
+// Returns the collapsed value so the caller can persist the normalized form.
+function validateFullName(rawName: unknown) {
+  if (typeof rawName !== 'string') {
+    throw new APIError('UNPROCESSABLE_ENTITY', { message: FULL_NAME_MESSAGE });
+  }
+  const name = collapseSpaces(rawName);
+  if (
+    name.length < FULL_NAME_MIN ||
+    name.length > FULL_NAME_MAX ||
+    !NAME_REGEX.test(name)
+  ) {
+    throw new APIError('UNPROCESSABLE_ENTITY', { message: FULL_NAME_MESSAGE });
+  }
+  return name;
+}
+
+// Profile "Phone Number". An empty value clears the number; otherwise it must be
+// 10-15 digits with an optional leading `+`. Returns the normalized value
+// (separators stripped, or null when cleared) for persistence.
+function validatePhoneNumber(rawPhone: unknown) {
+  if (typeof rawPhone !== 'string') {
+    throw new APIError('UNPROCESSABLE_ENTITY', { message: PHONE_MESSAGE });
+  }
+  const phone = stripPhoneSeparators(rawPhone.trim());
+  if (phone === '') return null;
+  if (!PHONE_REGEX.test(phone)) {
+    throw new APIError('UNPROCESSABLE_ENTITY', { message: PHONE_MESSAGE });
+  }
+  return phone;
 }
 
 function validateEmail(rawEmail: unknown) {
@@ -195,6 +233,18 @@ export const auth = betterAuth({
       trustedProviders: ['google'],
     },
   },
+  user: {
+    additionalFields: {
+      // Surfaced on the session and accepted by `/update-user` (validated in
+      // the before-hook below). Maps to the `phoneNumber` column on the User
+      // model. `input: true` lets the profile form set it via update-user.
+      phoneNumber: {
+        type: 'string',
+        required: false,
+        input: true,
+      },
+    },
+  },
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
       if (ctx.path === '/sign-in/magic-link') {
@@ -238,6 +288,22 @@ export const auth = betterAuth({
         const body = ctx.body as { newPassword: string };
         validatePassword(body.newPassword);
       }
+      // Profile updates from the dashboard. `/update-user` doesn't run our
+      // field-format rules on its own, so validate + normalize here and write
+      // the cleaned values back onto the body the handler will persist. Only
+      // the keys actually present are touched (partial updates are allowed).
+      if (ctx.path === '/update-user') {
+        const body = ctx.body as {
+          name?: unknown;
+          phoneNumber?: unknown;
+        };
+        if (body.name !== undefined) {
+          body.name = validateFullName(body.name);
+        }
+        if (body.phoneNumber !== undefined) {
+          body.phoneNumber = validatePhoneNumber(body.phoneNumber);
+        }
+      }
     }),
   },
   databaseHooks: {
@@ -270,5 +336,19 @@ export const auth = betterAuth({
       disableSignUp: false,
     }),
     username(),
+    // Adds `user.role` (default "user") and exposes it on the session so
+    // nestjs-better-auth's @Roles(['agent'|'admin']) guard can gate routes.
+    // The role/banned/banExpires/impersonatedBy columns it needs are in the
+    // Prisma schema (migration add_roles_and_connect).
+    admin(),
+    // Lets non-browser clients (the mobile app) authenticate without cookies.
+    // On sign-in better-auth returns the session token in a `set-auth-token`
+    // response header; the client stores it and sends it back as
+    // `Authorization: Bearer <token>` on subsequent requests, which this plugin
+    // converts into the same session the cookie flow uses. The web frontend is
+    // unaffected — it keeps using cookies (see the `advanced` cookie config
+    // above). The token is the opaque DB session token (schema.prisma `session`
+    // table), so `expiresAt` and instant server-side revocation still apply.
+    bearer(),
   ],
 });

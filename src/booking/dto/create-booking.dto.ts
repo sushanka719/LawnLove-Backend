@@ -14,7 +14,10 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { BookingFrequency, BookingTimeSlot } from '../../../generated/prisma/client';
+import {
+  BookingFrequency,
+  BookingTimeSlot,
+} from '../../../generated/prisma/client';
 
 const PHONE_REGEX = /^[+]?[\d\s()-]{7,20}$/;
 const DATE_KEY_REGEX = /^\d{4}-\d{2}-\d{2}$/;

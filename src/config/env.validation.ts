@@ -18,6 +18,21 @@ export const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string(),
   GOOGLE_CLIENT_SECRET: z.string(),
   STRIPE_SECRET_KEY: z.string(),
+  // Frontend base URL — used for Stripe Connect onboarding return/refresh links
+  // and email deep-links.
+  APP_URL: z.string().url().default('http://localhost:3000'),
+  // Platform's cut of each job payout (0..1). Defaults to 20%.
+  PLATFORM_FEE_PCT: z.coerce.number().min(0).max(1).default(0.2),
+  // Cloudflare R2 (S3-compatible). Optional so the app boots before R2 is
+  // configured; the storage service errors clearly if used while unset.
+  R2_ENDPOINT: z.string().url().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_BUCKET: z.string().optional(),
+  // Public base URL for the R2 bucket (r2.dev dev URL or a custom domain), used
+  // to build directly-viewable URLs for profile avatars. Optional so the app
+  // boots before it's set; the avatar upload endpoint errors clearly if unset.
+  R2_PUBLIC_URL: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
