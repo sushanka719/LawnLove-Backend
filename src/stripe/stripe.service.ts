@@ -15,6 +15,15 @@ type ConnectAgent = {
   stripeConnectAccountId?: string | null;
 };
 
+export type SavedCard = {
+  id: string;
+  brand: string;
+  last4: string;
+  expMonth: number | null;
+  expYear: number | null;
+  isDefault: boolean;
+};
+
 @Injectable()
 export class StripeService {
   private readonly stripe: Stripe;
@@ -71,6 +80,48 @@ export class StripeService {
     const paymentMethod =
       await this.stripe.paymentMethods.retrieve(paymentMethodId);
     return paymentMethod.customer === customerId;
+  }
+
+  // --- Saved cards (customer wallet) --------------------------------------
+
+  // List the customer's saved cards, flagging which one is their Stripe default
+  // (customer.invoice_settings.default_payment_method). A customer can hold many
+  // cards — the escrow charge / booking flow picks one by id.
+  async listPaymentMethods(customerId: string): Promise<SavedCard[]> {
+    const [methods, customer] = await Promise.all([
+      this.stripe.paymentMethods.list({ customer: customerId, type: 'card' }),
+      this.stripe.customers.retrieve(customerId),
+    ]);
+
+    // `retrieve` returns Customer | DeletedCustomer; a deleted customer has no
+    // invoice_settings. `default_payment_method` may be an id or expanded object.
+    let defaultPaymentMethodId: string | null = null;
+    if ('invoice_settings' in customer) {
+      const dpm = customer.invoice_settings?.default_payment_method;
+      defaultPaymentMethodId = typeof dpm === 'string' ? dpm : (dpm?.id ?? null);
+    }
+
+    return methods.data.map((pm) => ({
+      id: pm.id,
+      brand: pm.card?.brand ?? 'unknown',
+      last4: pm.card?.last4 ?? '••••',
+      expMonth: pm.card?.exp_month ?? null,
+      expYear: pm.card?.exp_year ?? null,
+      isDefault: pm.id === defaultPaymentMethodId,
+    }));
+  }
+
+  // Mark a card as the customer's default for future off-session charges.
+  async setDefaultPaymentMethod(customerId: string, paymentMethodId: string) {
+    await this.stripe.customers.update(customerId, {
+      invoice_settings: { default_payment_method: paymentMethodId },
+    });
+  }
+
+  // Detach a saved card from the customer. It can no longer be charged after
+  // this; existing bookings that reference it will fail their next charge.
+  async detachPaymentMethod(paymentMethodId: string) {
+    await this.stripe.paymentMethods.detach(paymentMethodId);
   }
 
   // --- Stripe Connect (Express) — agent payout accounts -------------------
