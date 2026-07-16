@@ -2,7 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
-import { admin, magicLink, username } from 'better-auth/plugins';
+import { admin, bearer, magicLink, username } from 'better-auth/plugins';
 import {
   sendMagicLinkEmail,
   sendResetPasswordEmail,
@@ -341,5 +341,14 @@ export const auth = betterAuth({
     // The role/banned/banExpires/impersonatedBy columns it needs are in the
     // Prisma schema (migration add_roles_and_connect).
     admin(),
+    // Lets non-browser clients (the mobile app) authenticate without cookies.
+    // On sign-in better-auth returns the session token in a `set-auth-token`
+    // response header; the client stores it and sends it back as
+    // `Authorization: Bearer <token>` on subsequent requests, which this plugin
+    // converts into the same session the cookie flow uses. The web frontend is
+    // unaffected — it keeps using cookies (see the `advanced` cookie config
+    // above). The token is the opaque DB session token (schema.prisma `session`
+    // table), so `expiresAt` and instant server-side revocation still apply.
+    bearer(),
   ],
 });
