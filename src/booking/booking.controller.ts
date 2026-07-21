@@ -14,11 +14,6 @@ type AuthSession = typeof auth.$Infer.Session;
 export class BookingController {
   constructor(private readonly bookingService: BookingService) {}
 
-  @Post('setup-intent')
-  createSetupIntent(@Session() session: AuthSession) {
-    return this.bookingService.createSetupIntent(session.user);
-  }
-
   @Post()
   createBooking(
     @Session() session: AuthSession,
@@ -41,6 +36,13 @@ export class BookingController {
     @Query() query: ListBookingsDto,
   ) {
     return this.bookingService.listInvoices(session.user.id, query);
+  }
+
+  // Current recurring plans (active/past-due subscriptions) for the Settings
+  // "Plan" section. Concrete route — must stay before the `:id` catch-all.
+  @Get('current-plans')
+  listCurrentPlans(@Session() session: AuthSession) {
+    return this.bookingService.listCurrentPlans(session.user.id);
   }
 
   // NOTE: `GET /bookings/:id` overlaps concrete routes — `:id` would capture
