@@ -62,7 +62,7 @@ export class StripeWebhookController {
     switch (event.type) {
       // One-time bookings: the PaymentIntent carries our booking metadata.
       case 'payment_intent.succeeded': {
-        const pi = event.data.object as Stripe.PaymentIntent;
+        const pi = event.data.object;
         const bookingId = pi.metadata?.bookingId;
         if (!bookingId) return; // subscription-invoice PIs → handled by invoice.paid
         await this.activateById(bookingId, pi.amount_received ?? pi.amount);
@@ -70,14 +70,14 @@ export class StripeWebhookController {
       }
       // Recurring bookings: match the invoice's subscription to the booking.
       case 'invoice.paid': {
-        const invoice = event.data.object as Stripe.Invoice;
+        const invoice = event.data.object;
         const subscriptionId = this.subscriptionIdFromInvoice(invoice);
         if (!subscriptionId) return;
         await this.activateBySubscription(subscriptionId, invoice.amount_paid);
         return;
       }
       case 'invoice.payment_failed': {
-        const invoice = event.data.object as Stripe.Invoice;
+        const invoice = event.data.object;
         const subscriptionId = this.subscriptionIdFromInvoice(invoice);
         if (!subscriptionId) return;
         await this.prisma.booking.updateMany({
@@ -90,7 +90,7 @@ export class StripeWebhookController {
         return;
       }
       case 'customer.subscription.deleted': {
-        const sub = event.data.object as Stripe.Subscription;
+        const sub = event.data.object;
         await this.prisma.booking.updateMany({
           where: {
             stripeSubscriptionId: sub.id,

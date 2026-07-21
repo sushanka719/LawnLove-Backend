@@ -1,4 +1,11 @@
-import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 // Ban a user. Both fields optional: no reason and no expiry means a permanent
 // ban with no stated reason. The `banned`/`banReason`/`banExpires` columns are
