@@ -2,7 +2,6 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
-  IsBoolean,
   IsEnum,
   IsInt,
   IsNumber,
@@ -14,10 +13,7 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import {
-  BookingFrequency,
-  BookingTimeSlot,
-} from '../../../generated/prisma/client';
+import { BookingTimeSlot } from '../../../generated/prisma/client';
 
 const PHONE_REGEX = /^[+]?[\d\s()-]{7,20}$/;
 const DATE_KEY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -56,8 +52,11 @@ export class CreateBookingDto {
   @Type(() => BoundaryPointDto)
   boundary: BoundaryPointDto[];
 
-  @IsEnum(BookingFrequency)
-  frequency: BookingFrequency;
+  // The chosen plan (replaces the old hardcoded `frequency`). The server loads
+  // the plan and recomputes the amount from it — the client never sends prices.
+  @IsString()
+  @MinLength(1)
+  planId: string;
 
   @IsString()
   @Matches(DATE_KEY_REGEX, { message: 'Date must be in YYYY-MM-DD format.' })
@@ -65,14 +64,6 @@ export class CreateBookingDto {
 
   @IsEnum(BookingTimeSlot)
   timeSlot: BookingTimeSlot;
-
-  @IsString()
-  @MinLength(1)
-  paymentMethodId: string;
-
-  @IsOptional()
-  @IsBoolean()
-  saveCard?: boolean;
 
   // Accepted for forward-compat but recomputed server-side (never trusted).
   @IsOptional()

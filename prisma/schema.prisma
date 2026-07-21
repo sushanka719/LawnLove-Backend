@@ -109,7 +109,9 @@ enum BookingTimeSlot {
 }
 
 enum BookingStatus {
-  scheduled
+  pendingPayment
+  active
+  pastDue
   cancelled
   completed
 }
@@ -118,6 +120,8 @@ model Booking {
   id                    String           @id @default(cuid())
   userId                String
   user                  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId                String
+  plan                  Plan             @relation(fields: [planId], references: [id])
   phone                 String
   address               String
   lat                   Float?
@@ -125,6 +129,15 @@ model Booking {
   boundary              Json
   areaSqFt              Int
   estimatedAreaSqFt     Int
+  // Authoritative new-model amounts (CENTS). basePrice snapshots plan.basePrice
+  // at booking time; areaSurcharge is the matching PlanAreaTier surcharge. The
+  // amount charged to Stripe = basePrice + areaSurcharge.
+  basePrice             Int
+  areaSurcharge         Int
+  // Legacy display columns (WHOLE DOLLARS), backfilled from the plan on create so
+  // existing admin/agent/dashboard views keep rendering unchanged. `frequency`
+  // is derived from the plan (interval, or oneTime). To be dropped once those
+  // views read the cents fields.
   frequency             BookingFrequency
   subtotal              Int
   discountPct           Float
@@ -132,13 +145,20 @@ model Booking {
   scheduleDate          DateTime
   timeSlot              BookingTimeSlot
   stripeCustomerId      String
-  stripePaymentMethodId String
-  status                BookingStatus    @default(scheduled)
+  // Legacy escrow saved-card id — null for prepaid bookings. Removed with the
+  // payment-methods module in a later phase.
+  stripePaymentMethodId String?
+  stripeSubscriptionId  String?
+  stripePaymentIntentId String?
+  amountCharged         Int? // cents actually charged (set by the Stripe webhook)
+  status                BookingStatus    @default(pendingPayment)
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
   jobs                  Job[]
 
   @@index([userId])
+  @@index([planId])
+  @@index([stripeSubscriptionId])
   @@map("booking")
 }
 
@@ -180,6 +200,11 @@ model Job {
   stripeTransferId      String?
   chargedAt             DateTime?
   releasedAt            DateTime?
+  // Deferred per-visit agent payout: amount owed is recorded at completion; the
+  // disbursement mechanism (and agentPaidAt/agentPayoutRef) is wired later.
+  agentPayoutAmount     Int? // cents owed to the agent for this visit
+  agentPaidAt           DateTime?
+  agentPayoutRef        String?
   createdAt             DateTime   @default(now())
   updatedAt             DateTime   @updatedAt
   photos                JobPhoto[]
@@ -246,6 +271,7 @@ model Plan {
   sortOrder       Int             @default(0)
   stripeProductId String? // optional Stripe Product mirror for clean reporting
   areaTiers       PlanAreaTier[]
+  bookings        Booking[]
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
