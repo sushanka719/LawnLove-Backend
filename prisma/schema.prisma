@@ -37,7 +37,8 @@ model User {
   sessions               Session[]
   accounts               Account[]
   bookings               Booking[]
-  jobs                   Job[]     @relation("AgentJobs")
+  jobs                   Job[]          @relation("AgentJobs")
+  savedAddresses         SavedAddress[]
 
   @@unique([email])
   @@unique([username])
@@ -92,6 +93,25 @@ model Verification {
 
   @@index([identifier])
   @@map("verification")
+}
+
+// A property a customer keeps on file for faster booking. Mirrors the address
+// fields embedded on Booking (single free-text line + optional Mapbox coords).
+// Exactly one row per user is the default (enforced in AddressesService, which
+// unsets the others in a transaction whenever a default is set).
+model SavedAddress {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  address   String
+  lat       Float?
+  lng       Float?
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("saved_address")
 }
 
 enum BookingFrequency {
