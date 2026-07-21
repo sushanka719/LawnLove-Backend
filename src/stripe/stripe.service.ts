@@ -65,7 +65,11 @@ export class StripeService {
     const setupIntent = await this.stripe.setupIntents.create({
       customer: customerId,
       usage: 'off_session',
-      automatic_payment_methods: { enabled: true },
+      // Card-only: `automatic_payment_methods` enables Stripe Link, which then
+      // saves the method as a `link` PaymentMethod. Our wallet lists (and the
+      // escrow charge reads) `type: 'card'` only, so a Link method would attach
+      // to the customer but never show up in the list. Restrict to card.
+      payment_method_types: ['card'],
     });
     return { clientSecret: setupIntent.client_secret, customerId };
   }
