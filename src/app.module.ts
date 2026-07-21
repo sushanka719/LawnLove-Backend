@@ -8,6 +8,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { auth } from './auth/auth';
 import { SetPasswordController } from './auth/set-password.controller';
+import { AccountModule } from './account/account.module';
 import { AdminModule } from './admin/admin.module';
 import { AgentModule } from './agent/agent.module';
 import { BookingModule } from './booking/booking.module';
@@ -36,6 +37,7 @@ import { PrismaModule } from './prisma/prisma.module';
     BookingModule,
     PlansModule,
     PaymentMethodsModule,
+    AccountModule,
     AgentModule,
     AdminModule,
     PayoutModule,
