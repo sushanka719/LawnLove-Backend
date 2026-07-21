@@ -32,6 +32,20 @@ model User {
   // Stripe Connect (Express) — set once an agent onboards for payouts.
   stripeConnectAccountId String?
   payoutsEnabled         Boolean   @default(false)
+  // Notification preferences (dashboard Settings). Email reminders default on
+  // and are the only channel actually wired today; SMS "on the way" alerts are
+  // a future feature (persisted but surfaced disabled in the UI); promotional
+  // emails default on per product.
+  emailReminders         Boolean   @default(true)
+  smsOnTheWayAlerts      Boolean   @default(false)
+  promotionalEmails      Boolean   @default(true)
+  // Soft delete: when the customer requests account deletion we record the
+  // request time and a scheduled hard-delete time (a grace period later). The
+  // account stays fully usable in the meantime — the user can sign back in and
+  // cancel — and a daily cron permanently removes accounts past their scheduled
+  // time. `null`/`null` means the account is not scheduled for deletion.
+  deletionRequestedAt    DateTime?
+  deletionScheduledAt    DateTime?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
   sessions               Session[]
