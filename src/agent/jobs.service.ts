@@ -15,6 +15,7 @@ import {
   bookingServiceLabel,
 } from '../booking/booking-format';
 import { distanceMeters } from '../booking/geo';
+import type { BookingFrequency } from '../../generated/prisma/client';
 import type { StartJobDto } from './dto/start-job.dto';
 import type { PhotoUploadUrlDto } from './dto/photo-upload-url.dto';
 import type { RegisterPhotoDto } from './dto/register-photo.dto';
@@ -204,8 +205,45 @@ export class JobsService {
       );
     }
 
-    // Escrow charge: bill the saved card off-session. Booking totals are stored
-    // in whole dollars; Stripe wants cents.
+    const completedAt = new Date();
+
+    // Prepaid bookings (the current model) took the money upfront when the
+    // customer subscribed/booked — there is NO charge at completion. We just
+    // complete the visit and record what's owed to the agent (disbursement is
+    // wired later). Legacy escrow bookings (a saved card on file) still bill at
+    // completion in the branch below.
+    if (!job.booking.stripePaymentMethodId) {
+      const payoutAmount = job.booking.basePrice + job.booking.areaSurcharge;
+      const updated = await this.prisma.job.update({
+        where: { id: jobId },
+        data: {
+          status: 'completed',
+          completedAt,
+          agentPayoutAmount: payoutAmount,
+        },
+        select: {
+          id: true,
+          status: true,
+          completedAt: true,
+          agentPayoutAmount: true,
+        },
+      });
+      await this.sendReceipt({
+        jobId,
+        bookingId: job.bookingId,
+        customerId: job.booking.userId,
+        frequency: job.booking.frequency,
+        address: job.booking.address,
+        estimatedAreaSqFt: job.booking.estimatedAreaSqFt,
+        servicedOn: completedAt,
+        amountCents: payoutAmount,
+      });
+      return updated;
+    }
+
+    // --- Legacy escrow charge (saved-card bookings) -------------------------
+    // Bill the saved card off-session. Legacy totals are stored in whole
+    // dollars; Stripe wants cents.
     const amount = job.booking.totalPerVisit * 100;
     const platformFee = Math.round(amount * this.config.platformFeePct);
 
@@ -226,7 +264,7 @@ export class JobsService {
       if (code === 'authentication_required') {
         await this.prisma.job.update({
           where: { id: jobId },
-          data: { status: 'completed', completedAt: new Date() },
+          data: { status: 'completed', completedAt },
         });
         throw new BadRequestException(
           'Payment needs customer authentication. The customer must re-confirm their card.',
@@ -235,7 +273,6 @@ export class JobsService {
       throw err;
     }
 
-    const completedAt = new Date();
     const updated = await this.prisma.job.update({
       where: { id: jobId },
       data: {
@@ -256,32 +293,54 @@ export class JobsService {
       },
     });
 
-    // Email the paid receipt — never let a mail failure roll back a paid,
-    // completed job.
+    await this.sendReceipt({
+      jobId,
+      bookingId: job.bookingId,
+      customerId: job.booking.userId,
+      frequency: job.booking.frequency,
+      address: job.booking.address,
+      estimatedAreaSqFt: job.booking.estimatedAreaSqFt,
+      servicedOn: completedAt,
+      amountCents: amount,
+    });
+
+    return updated;
+  }
+
+  // Best-effort receipt email — never let a mail failure roll back a completed
+  // job. `amountCents` is what the customer paid for this visit.
+  private async sendReceipt(params: {
+    jobId: string;
+    bookingId: string;
+    customerId: string;
+    frequency: BookingFrequency;
+    address: string;
+    estimatedAreaSqFt: number;
+    servicedOn: Date;
+    amountCents: number;
+  }) {
     try {
       const customer = await this.prisma.user.findUnique({
-        where: { id: job.booking.userId },
+        where: { id: params.customerId },
         select: { email: true },
       });
       if (customer?.email) {
         await sendInvoiceEmail(customer.email, {
-          invoiceNumber: `INV-${jobId.slice(-6).toUpperCase()}`,
-          reference: bookingReference(job.bookingId),
-          serviceLabel: bookingServiceLabel(job.booking.frequency),
-          address: job.booking.address,
-          servicedOn: completedAt,
-          areaSqFt: job.booking.estimatedAreaSqFt,
-          amountCents: amount,
-          dashboardUrl: `${this.config.appUrl}/dashboard/jobs/${jobId}`,
+          invoiceNumber: `INV-${params.jobId.slice(-6).toUpperCase()}`,
+          reference: bookingReference(params.bookingId),
+          serviceLabel: bookingServiceLabel(params.frequency),
+          address: params.address,
+          servicedOn: params.servicedOn,
+          areaSqFt: params.estimatedAreaSqFt,
+          amountCents: params.amountCents,
+          dashboardUrl: `${this.config.appUrl}/dashboard/jobs/${params.jobId}`,
         });
       }
     } catch (mailErr) {
       this.logger.error(
-        `Failed to send invoice email for job ${jobId}`,
+        `Failed to send invoice email for job ${params.jobId}`,
         mailErr as Error,
       );
     }
-
-    return updated;
   }
 }
