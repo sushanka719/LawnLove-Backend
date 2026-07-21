@@ -216,3 +216,53 @@ model Review {
 
   @@map("review")
 }
+
+enum PlanBillingType {
+  recurring
+  oneTime
+}
+
+// Only meaningful when billingType = recurring; null for one-time plans.
+enum PlanInterval {
+  weekly
+  biweekly
+  monthly
+}
+
+// Admin-managed booking plan. Replaces the previously hardcoded frequency tiers
+// on the booking flow (fetched dynamically by /booking/schedule). The final
+// per-visit charge = basePrice + the surcharge of the PlanAreaTier bracket the
+// measured estimatedAreaSqFt falls into.
+model Plan {
+  id              String          @id @default(cuid())
+  name            String
+  slug            String          @unique
+  description     String?
+  billingType     PlanBillingType
+  interval        PlanInterval? // required iff billingType = recurring
+  basePrice       Int // cents
+  features        String[] // bullet points shown on the plan card
+  active          Boolean         @default(true)
+  sortOrder       Int             @default(0)
+  stripeProductId String? // optional Stripe Product mirror for clean reporting
+  areaTiers       PlanAreaTier[]
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@map("plan")
+}
+
+// Non-overlapping, ascending area brackets for a plan. The surcharge of the
+// bracket the measured area falls into is added to the plan's basePrice
+// (0 if the area is below the first tier's minSqFt).
+model PlanAreaTier {
+  id        String @id @default(cuid())
+  planId    String
+  plan      Plan   @relation(fields: [planId], references: [id], onDelete: Cascade)
+  minSqFt   Int
+  maxSqFt   Int? // null = no upper bound (top tier)
+  surcharge Int // cents added to basePrice for this bracket
+
+  @@index([planId])
+  @@map("plan_area_tier")
+}
