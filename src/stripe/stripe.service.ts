@@ -230,7 +230,8 @@ export class StripeService {
     let defaultPaymentMethodId: string | null = null;
     if ('invoice_settings' in customer) {
       const dpm = customer.invoice_settings?.default_payment_method;
-      defaultPaymentMethodId = typeof dpm === 'string' ? dpm : (dpm?.id ?? null);
+      defaultPaymentMethodId =
+        typeof dpm === 'string' ? dpm : (dpm?.id ?? null);
     }
 
     return methods.data.map((pm) => ({

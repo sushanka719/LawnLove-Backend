@@ -123,7 +123,10 @@ export class PlansService {
         await tx.planAreaTier.deleteMany({ where: { planId: id } });
         if (dto.areaTiers.length > 0) {
           await tx.planAreaTier.createMany({
-            data: dto.areaTiers.map((t) => ({ planId: id, ...this.tierData(t) })),
+            data: dto.areaTiers.map((t) => ({
+              planId: id,
+              ...this.tierData(t),
+            })),
           });
         }
       }
@@ -216,7 +219,11 @@ export class PlansService {
 
   // Use the provided slug or derive one from the name; ensure uniqueness. When
   // updating, `excludeId` lets a plan keep its own slug.
-  private async resolveSlug(slug: string | undefined, name: string, excludeId?: string) {
+  private async resolveSlug(
+    slug: string | undefined,
+    name: string,
+    excludeId?: string,
+  ) {
     const candidate = (slug ?? this.slugify(name)).trim();
     if (!candidate) {
       throw new BadRequestException('Unable to derive a slug from the name.');

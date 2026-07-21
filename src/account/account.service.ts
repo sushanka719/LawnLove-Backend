@@ -94,7 +94,11 @@ export class AccountService {
       data: { deletionRequestedAt: null, deletionScheduledAt: null },
       select: { id: true },
     });
-    return { requestedAt: null, scheduledAt: null, graceDays: DELETION_GRACE_DAYS };
+    return {
+      requestedAt: null,
+      scheduledAt: null,
+      graceDays: DELETION_GRACE_DAYS,
+    };
   }
 
   private toSettings(user: {
