@@ -24,30 +24,31 @@ export class BookingService {
     private readonly stripe: StripeService,
   ) {}
 
-  async createSetupIntent(user: SessionUser) {
-    const customerId = await this.stripe.getOrCreateCustomer(user);
-    return this.stripe.createSetupIntent(customerId);
-  }
-
+  // Create a booking for the chosen plan and start its payment. Returns the
+  // Stripe client secret the embedded Payment Element confirms against — the
+  // customer is charged now (prepaid). The webhook flips the booking to active.
   async createBooking(user: SessionUser, dto: CreateBookingDto) {
-    const customerId = await this.stripe.getOrCreateCustomer(user);
-
-    const owned = await this.stripe.assertPaymentMethodOwnedByCustomer(
-      dto.paymentMethodId,
-      customerId,
-    );
-    if (!owned) {
-      throw new BadRequestException(
-        'This payment method is not associated with your account.',
-      );
+    // Load the chosen plan (+ its area tiers). Reject unknown/inactive plans.
+    const plan = await this.prisma.plan.findUnique({
+      where: { id: dto.planId },
+      include: { areaTiers: true },
+    });
+    if (!plan || !plan.active) {
+      throw new BadRequestException('The selected plan is unavailable.');
+    }
+    if (plan.billingType === 'recurring' && !plan.interval) {
+      throw new BadRequestException('The selected plan is misconfigured.');
     }
 
-    // Recompute area + all totals server-side; never trust client-sent prices.
+    const customerId = await this.stripe.getOrCreateCustomer(user);
+
+    // Recompute area + amount server-side; never trust client-sent prices. All
+    // amounts are in CENTS.
     const areaSqFt = Math.round(polygonAreaSqFt(dto.boundary));
     const estimatedAreaSqFt = Math.round(areaSqFt * ESTIMATED_AREA_FACTOR);
-    const { subtotal, discountPct, totalPerVisit } = computeQuote(
+    const { basePrice, areaSurcharge, totalPerVisit } = computeQuote(
+      plan,
       estimatedAreaSqFt,
-      dto.frequency,
     );
 
     const scheduleDate = new Date(`${dto.date}T00:00:00.000Z`);
@@ -55,12 +56,19 @@ export class BookingService {
       throw new BadRequestException('Invalid schedule date.');
     }
 
-    // Create the booking and its first Job (the visit to be dispatched)
-    // atomically — a booking should never exist without a Job to service.
+    // Legacy display columns (whole dollars), derived from the plan.
+    // `plan.interval` is guaranteed non-null for recurring plans by the check
+    // above, so the assertion is safe.
+    const frequency =
+      plan.billingType === 'oneTime' ? 'oneTime' : plan.interval!;
+
+    // Create the booking (pendingPayment) and its first Job atomically — a
+    // booking should never exist without a Job to service.
     const booking = await this.prisma.$transaction(async (tx) => {
       const created = await tx.booking.create({
         data: {
           userId: user.id,
+          planId: plan.id,
           phone: dto.phone,
           address: dto.address,
           lat: dto.lat ?? null,
@@ -71,25 +79,18 @@ export class BookingService {
           })),
           areaSqFt,
           estimatedAreaSqFt,
-          frequency: dto.frequency,
-          subtotal,
-          discountPct,
-          totalPerVisit,
+          basePrice,
+          areaSurcharge,
+          frequency,
+          subtotal: Math.round(basePrice / 100),
+          discountPct: 0,
+          totalPerVisit: Math.round(totalPerVisit / 100),
           scheduleDate,
           timeSlot: dto.timeSlot,
           stripeCustomerId: customerId,
-          stripePaymentMethodId: dto.paymentMethodId,
+          status: 'pendingPayment',
         },
-        select: {
-          id: true,
-          estimatedAreaSqFt: true,
-          subtotal: true,
-          discountPct: true,
-          totalPerVisit: true,
-          frequency: true,
-          scheduleDate: true,
-          timeSlot: true,
-        },
+        select: { id: true },
       });
 
       await tx.job.create({
@@ -99,7 +100,48 @@ export class BookingService {
       return created;
     });
 
-    return booking;
+    // Start the charge. Metadata lets the webhook match the event to this
+    // booking. On failure, drop the dangling pendingPayment booking.
+    const metadata = {
+      bookingId: booking.id,
+      planId: plan.id,
+      userId: user.id,
+    };
+    try {
+      let clientSecret: string;
+      if (plan.billingType === 'recurring') {
+        const productId = await this.stripe.upsertProduct(plan);
+        const sub = await this.stripe.createSubscription({
+          customerId,
+          productId,
+          unitAmount: totalPerVisit,
+          interval: plan.interval as 'weekly' | 'biweekly' | 'monthly',
+          metadata,
+        });
+        clientSecret = sub.clientSecret;
+        await this.prisma.booking.update({
+          where: { id: booking.id },
+          data: { stripeSubscriptionId: sub.subscriptionId },
+        });
+      } else {
+        const pi = await this.stripe.createPaymentIntent({
+          customerId,
+          amount: totalPerVisit,
+          metadata,
+        });
+        clientSecret = pi.clientSecret;
+        await this.prisma.booking.update({
+          where: { id: booking.id },
+          data: { stripePaymentIntentId: pi.paymentIntentId },
+        });
+      }
+      return { bookingId: booking.id, clientSecret, amount: totalPerVisit };
+    } catch (err) {
+      await this.prisma.booking
+        .delete({ where: { id: booking.id } })
+        .catch(() => undefined);
+      throw err;
+    }
   }
 
   // Paginated list of the signed-in customer's bookings, newest first, for the
@@ -150,6 +192,47 @@ export class BookingService {
       pageSize,
       totalPages: Math.max(1, Math.ceil(total / pageSize)),
     };
+  }
+
+  // The customer's current recurring plans for the Settings "Plan" section —
+  // active or past-due subscriptions (one-time bookings aren't ongoing plans).
+  // Returned newest first, unpaginated but capped, so the caller can render an
+  // empty state, a single plan, or several without extra round-trips.
+  async listCurrentPlans(userId: string) {
+    const rows = await this.prisma.booking.findMany({
+      where: {
+        userId,
+        frequency: { not: 'oneTime' },
+        status: { in: ['active', 'pastDue'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: {
+        id: true,
+        address: true,
+        frequency: true,
+        scheduleDate: true,
+        timeSlot: true,
+        totalPerVisit: true,
+        status: true,
+        createdAt: true,
+        _count: { select: { jobs: true } },
+      },
+    });
+
+    return rows.map((b) => ({
+      id: b.id,
+      reference: bookingReference(b.id),
+      title: bookingServiceLabel(b.frequency),
+      address: b.address,
+      frequency: b.frequency,
+      scheduleDate: b.scheduleDate,
+      timeSlot: b.timeSlot,
+      totalPerVisit: b.totalPerVisit,
+      status: b.status,
+      createdAt: b.createdAt,
+      visitsCount: b._count.jobs,
+    }));
   }
 
   // Full detail for one booking the customer owns, including its visits (Jobs).

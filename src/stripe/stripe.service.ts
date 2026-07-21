@@ -61,6 +61,134 @@ export class StripeService {
     return customer.id;
   }
 
+  // --- Prepaid subscription / one-time payment (current money flow) --------
+
+  // Ensure a Stripe Product exists for the plan (so subscription invoices and
+  // reporting are clean) and persist its id on the plan row. Returns the id.
+  async upsertProduct(plan: {
+    id: string;
+    name: string;
+    stripeProductId: string | null;
+  }): Promise<string> {
+    if (plan.stripeProductId) {
+      // Keep the product name in sync; ignore failures (reporting nicety only).
+      try {
+        await this.stripe.products.update(plan.stripeProductId, {
+          name: plan.name,
+        });
+      } catch {
+        // non-fatal
+      }
+      return plan.stripeProductId;
+    }
+    const product = await this.stripe.products.create({
+      name: plan.name,
+      metadata: { planId: plan.id },
+    });
+    await this.prisma.plan.update({
+      where: { id: plan.id },
+      data: { stripeProductId: product.id },
+    });
+    return product.id;
+  }
+
+  // weekly → every 1 week, biweekly → every 2 weeks, monthly → every 1 month.
+  private intervalToStripe(interval: 'weekly' | 'biweekly' | 'monthly'): {
+    interval: 'week' | 'month';
+    interval_count: number;
+  } {
+    switch (interval) {
+      case 'weekly':
+        return { interval: 'week', interval_count: 1 };
+      case 'biweekly':
+        return { interval: 'week', interval_count: 2 };
+      case 'monthly':
+        return { interval: 'month', interval_count: 1 };
+    }
+  }
+
+  // Recurring plan: create a Subscription with inline price_data (so the exact
+  // base+surcharge amount is charged without a fixed Stripe Price), restricted to
+  // card + Link. `default_incomplete` yields a first invoice whose
+  // confirmation_secret drives the embedded Payment Element on the client.
+  async createSubscription(params: {
+    customerId: string;
+    productId: string;
+    unitAmount: number; // cents (base + surcharge)
+    interval: 'weekly' | 'biweekly' | 'monthly';
+    metadata?: Record<string, string>;
+  }): Promise<{ subscriptionId: string; clientSecret: string }> {
+    const subscription = await this.stripe.subscriptions.create({
+      customer: params.customerId,
+      items: [
+        {
+          price_data: {
+            currency: 'usd',
+            product: params.productId,
+            unit_amount: params.unitAmount,
+            recurring: this.intervalToStripe(params.interval),
+          },
+          quantity: 1,
+        },
+      ],
+      payment_behavior: 'default_incomplete',
+      payment_settings: {
+        payment_method_types: ['card', 'link'],
+        save_default_payment_method: 'on_subscription',
+      },
+      // This API version exposes the first-payment client secret on the invoice's
+      // confirmation_secret (the legacy latest_invoice.payment_intent is gone).
+      expand: ['latest_invoice.confirmation_secret'],
+      metadata: params.metadata,
+    });
+
+    const invoice = subscription.latest_invoice;
+    const clientSecret =
+      invoice && typeof invoice !== 'string'
+        ? invoice.confirmation_secret?.client_secret
+        : null;
+    if (!clientSecret) {
+      throw new Error(
+        'Stripe did not return a confirmation secret for the subscription invoice.',
+      );
+    }
+    return { subscriptionId: subscription.id, clientSecret };
+  }
+
+  // One-time plan: a PaymentIntent charged now via the embedded Payment Element,
+  // restricted to card + Link (no automatic_payment_methods, which would surface
+  // other wallets).
+  async createPaymentIntent(params: {
+    customerId: string;
+    amount: number; // cents
+    metadata?: Record<string, string>;
+  }): Promise<{ paymentIntentId: string; clientSecret: string }> {
+    const intent = await this.stripe.paymentIntents.create({
+      amount: params.amount,
+      currency: 'usd',
+      customer: params.customerId,
+      payment_method_types: ['card', 'link'],
+      metadata: params.metadata,
+    });
+    if (!intent.client_secret) {
+      throw new Error('Stripe did not return a PaymentIntent client secret.');
+    }
+    return { paymentIntentId: intent.id, clientSecret: intent.client_secret };
+  }
+
+  async cancelSubscription(subscriptionId: string) {
+    return this.stripe.subscriptions.cancel(subscriptionId);
+  }
+
+  // Verify + parse a webhook payload. Requires STRIPE_WEBHOOK_SECRET to be set.
+  constructWebhookEvent(payload: Buffer, signature: string): Stripe.Event {
+    const secret = this.config.stripeWebhookSecret;
+    if (!secret) {
+      throw new Error('STRIPE_WEBHOOK_SECRET is not configured.');
+    }
+    return this.stripe.webhooks.constructEvent(payload, signature, secret);
+  }
+
   async createSetupIntent(customerId: string) {
     const setupIntent = await this.stripe.setupIntents.create({
       customer: customerId,

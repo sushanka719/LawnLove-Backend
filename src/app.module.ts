@@ -8,6 +8,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { auth } from './auth/auth';
 import { SetPasswordController } from './auth/set-password.controller';
+import { AccountModule } from './account/account.module';
 import { AddressesModule } from './addresses/addresses.module';
 import { AdminModule } from './admin/admin.module';
 import { AgentModule } from './agent/agent.module';
@@ -38,12 +39,17 @@ import { PrismaModule } from './prisma/prisma.module';
     PlansModule,
     PaymentMethodsModule,
     AddressesModule,
+    AccountModule,
     AgentModule,
     AdminModule,
     PayoutModule,
     ProfileModule,
     AuthModule.forRoot({
       auth,
+      // Capture the exact raw request buffer on `req.rawBody` (via body-parser's
+      // verify hook) so the Stripe webhook can verify signatures. JSON parsing
+      // still runs for every other route's @Body() DTOs.
+      bodyParser: { rawBody: true },
     }),
   ],
   controllers: [AppController, SetPasswordController],

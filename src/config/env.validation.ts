@@ -18,6 +18,10 @@ export const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string(),
   GOOGLE_CLIENT_SECRET: z.string(),
   STRIPE_SECRET_KEY: z.string(),
+  // Signing secret for the Stripe webhook (from `stripe listen` in dev, or the
+  // dashboard endpoint in prod). Optional so the app boots before it's set; the
+  // webhook route rejects requests until it is configured.
+  STRIPE_WEBHOOK_SECRET: z.string().optional(),
   // Frontend base URL — used for Stripe Connect onboarding return/refresh links
   // and email deep-links.
   APP_URL: z.string().url().default('http://localhost:3000'),
