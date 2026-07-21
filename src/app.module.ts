@@ -42,6 +42,10 @@ import { PrismaModule } from './prisma/prisma.module';
     ProfileModule,
     AuthModule.forRoot({
       auth,
+      // Capture the exact raw request buffer on `req.rawBody` (via body-parser's
+      // verify hook) so the Stripe webhook can verify signatures. JSON parsing
+      // still runs for every other route's @Body() DTOs.
+      bodyParser: { rawBody: true },
     }),
   ],
   controllers: [AppController, SetPasswordController],
