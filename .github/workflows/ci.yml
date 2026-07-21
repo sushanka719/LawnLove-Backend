@@ -29,6 +29,10 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/lawn_test
       BETTER_AUTH_SECRET: ci-test-secret-please-replace-in-real-envs-000000
       BETTER_AUTH_URL: http://localhost:3000
+      STRIPE_SECRET_KEY: sk_test_ci_placeholder
+      RESEND_API_KEY: ci_placeholder
+      GOOGLE_CLIENT_ID: ci_placeholder
+      GOOGLE_CLIENT_SECRET: ci_placeholder
 
     steps:
       - uses: actions/checkout@v4
