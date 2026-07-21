@@ -31,6 +31,37 @@
 $ pnpm install
 ```
 
+## Database (Prisma)
+
+The Prisma schema lives in [`prisma/schema.prisma`](prisma/schema.prisma) and the
+client is generated into `generated/prisma`.
+
+```bash
+# Regenerate the Prisma client after ANY change to schema.prisma.
+# Skipping this leaves a stale client that rejects new fields with
+# "Unknown argument" PrismaClientValidationError at runtime.
+$ pnpm exec prisma generate
+
+# Create + apply a new migration in development (prompts for a name),
+# then regenerates the client automatically.
+$ pnpm exec prisma migrate dev --name <migration_name>
+
+# Apply already-committed migrations to the database (used in CI / production).
+$ pnpm exec prisma migrate deploy
+
+# Show which migrations are applied vs. pending against the current database.
+$ pnpm exec prisma migrate status
+
+# Seed the admin user (reads SEED_ADMIN_* from .env).
+$ pnpm run seed:admin
+```
+
+> **Note:** use migrations (`migrate dev` / `migrate deploy`) as the source of
+> truth — not `prisma db push`. `db push` syncs the schema without recording
+> anything in the `_prisma_migrations` table, so `migrate status` reports every
+> migration as pending and a later `migrate deploy` will try to replay them
+> against an already-populated schema and fail.
+
 ## Compile and run the project
 
 ```bash

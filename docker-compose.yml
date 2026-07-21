@@ -13,6 +13,23 @@ services:
       retries: 3
       start_period: 30s
 
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: sushanka@123
+      POSTGRES_DB: lawnDB
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - coolify
+
+volumes:
+  postgres-data:
+
 networks:
   coolify:
     external: true

@@ -52,6 +52,10 @@ export class AppConfigService {
     return this.configService.get('STRIPE_SECRET_KEY', { infer: true });
   }
 
+  get stripeWebhookSecret() {
+    return this.configService.get('STRIPE_WEBHOOK_SECRET', { infer: true });
+  }
+
   get appUrl() {
     return this.configService.get('APP_URL', { infer: true });
   }
