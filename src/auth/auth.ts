@@ -4,6 +4,7 @@ import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { admin, bearer, magicLink, username } from 'better-auth/plugins';
 import {
+  sendAgentInviteEmail,
   sendMagicLinkEmail,
   sendResetPasswordEmail,
 } from '../mail/mail.service';
@@ -59,6 +60,28 @@ const isProduction = process.env.NODE_ENV === 'production';
 // here so a username injected this way is still well-formed.
 const pendingUsernameIdentifier = (email: string) =>
   `magic-link-username:${email}`;
+
+// Same "pending value keyed by email" trick, for admin agent invites. The
+// admin invite endpoint writes this row (value = JSON({businessName})) before
+// triggering the magic link; its mere existence signals "make this user an
+// agent." The sendMagicLink callback reads it to pick the invite email body,
+// and user.create.before consumes it to set role:'agent' when the link is
+// clicked. See src/admin/admin.service.ts inviteAgent().
+export const pendingAgentInviteIdentifier = (email: string) =>
+  `agent-invite:${email}`;
+
+type PendingAgentInvite = { businessName?: string };
+
+async function readPendingAgentInvite(
+  email: string,
+): Promise<{ id: string; businessName?: string } | null> {
+  const pending = await prisma.verification.findFirst({
+    where: { identifier: pendingAgentInviteIdentifier(email) },
+  });
+  if (!pending) return null;
+  const { businessName } = JSON.parse(pending.value) as PendingAgentInvite;
+  return { id: pending.id, businessName };
+}
 
 function normalizeUsername(rawUsername: string) {
   const displayUsername = rawUsername;
@@ -171,15 +194,38 @@ export const auth = betterAuth({
   // SameSite=Lax (the default) drops cookies set during the initial
   // cross-site fetch to /sign-in/social, which breaks the OAuth state-cookie
   // check on callback (`state_mismatch`) and would equally break the session
-  // cookie for any cross-site fetch-based auth call.
+  // cookie for any cross-site fetch-based auth call. So in production we always
+  // use SameSite=None + Secure.
   //
-  // Backend (railway.app) and frontend (gettola.app) are on different
-  // registrable domains, not shared subdomains — crossSubDomainCookies can't
-  // apply here (the browser rejects a Domain=.gettola.app cookie set by a
-  // railway.app response), so the cookie stays host-only on the backend's
-  // domain. SameSite=None still lets it round-trip on cross-site requests.
+  // Cookie DOMAIN scope depends on the deployment topology:
+  //
+  // - When the frontend and backend live on sibling subdomains of one parent
+  //   (e.g. frontend staging.lawnlove.gettola.app + backend
+  //   staging.backend.lawnlove.gettola.app, sharing lawnlove.gettola.app), set
+  //   COOKIE_DOMAIN=.lawnlove.gettola.app. better-auth then emits the session
+  //   cookie with that Domain so BOTH subdomains receive it. This is REQUIRED
+  //   for the Next.js middleware (proxy.ts) to work: that middleware runs on
+  //   the frontend origin and forwards the browser's cookies to
+  //   /api/auth/get-session — a host-only backend cookie is never present in
+  //   those requests, so without a shared Domain every /dashboard hit is seen
+  //   as unauthenticated and bounced to /login.
+  //
+  // - When frontend and backend are on different registrable domains (e.g. a
+  //   Vercel frontend + gettola.app backend), leave COOKIE_DOMAIN unset. The
+  //   browser would reject a cross-registrable-domain Domain cookie, so it
+  //   stays host-only; SameSite=None still lets direct browser->backend calls
+  //   round-trip it (but the middleware SSR session check can't work in that
+  //   topology — do the auth check client-side there).
   advanced: isProduction
     ? {
+        ...(process.env.COOKIE_DOMAIN
+          ? {
+              crossSubDomainCookies: {
+                enabled: true,
+                domain: process.env.COOKIE_DOMAIN,
+              },
+            }
+          : {}),
         defaultCookieAttributes: {
           sameSite: 'none',
           secure: true,
@@ -304,20 +350,45 @@ export const auth = betterAuth({
     user: {
       create: {
         before: async (user) => {
-          const pending = await prisma.verification.findFirst({
+          // Both pending-value rows (username from customer signup, role from
+          // an agent invite) are keyed by email and consumed here on the one
+          // create that follows the magic-link click. Merge whatever applies.
+          const data: Record<string, unknown> = { ...user };
+          let changed = false;
+
+          const pendingUsername = await prisma.verification.findFirst({
             where: { identifier: pendingUsernameIdentifier(user.email) },
           });
-          if (!pending) return;
-          await prisma.verification.delete({ where: { id: pending.id } });
-          const { username: normalizedUsername, displayUsername } = JSON.parse(
-            pending.value,
-          ) as {
-            username: string;
-            displayUsername: string;
-          };
-          return {
-            data: { ...user, username: normalizedUsername, displayUsername },
-          };
+          if (pendingUsername) {
+            await prisma.verification.delete({
+              where: { id: pendingUsername.id },
+            });
+            const { username: normalizedUsername, displayUsername } =
+              JSON.parse(pendingUsername.value) as {
+                username: string;
+                displayUsername: string;
+              };
+            data.username = normalizedUsername;
+            data.displayUsername = displayUsername;
+            changed = true;
+          }
+
+          const pendingInvite = await readPendingAgentInvite(user.email);
+          if (pendingInvite) {
+            await prisma.verification.delete({
+              where: { id: pendingInvite.id },
+            });
+            data.role = 'agent';
+            // Business name is stored as the user's name (no dedicated column);
+            // the agent can edit it later in their profile.
+            if (pendingInvite.businessName) {
+              data.name = pendingInvite.businessName;
+            }
+            changed = true;
+          }
+
+          if (!changed) return;
+          return { data };
         },
       },
     },
@@ -325,6 +396,14 @@ export const auth = betterAuth({
   plugins: [
     magicLink({
       sendMagicLink: async ({ email, url }) => {
+        // Agent invites reuse the magic-link flow but need their own email
+        // body (and greeting). A pending agent-invite row, written by the
+        // admin invite endpoint, is the signal to send that instead.
+        const invite = await readPendingAgentInvite(email);
+        if (invite) {
+          await sendAgentInviteEmail(email, url, invite.businessName);
+          return;
+        }
         await sendMagicLinkEmail(email, url);
       },
       disableSignUp: false,

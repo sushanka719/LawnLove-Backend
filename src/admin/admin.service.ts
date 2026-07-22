@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   Injectable,
@@ -6,17 +7,26 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { StripeService } from '../stripe/stripe.service';
 import { StorageService } from '../storage/storage.service';
+import { AppConfigService } from '../config/config.service';
 import {
   bookingReference,
   bookingServiceLabel,
 } from '../booking/booking-format';
+import { auth, pendingAgentInviteIdentifier } from '../auth/auth';
+import { sendAgentPromotedEmail } from '../mail/mail.service';
 import type { AssignableRole } from './dto/set-role.dto';
 import type { ListUsersDto } from './dto/list-users.dto';
 import type { ListJobsDto } from './dto/list-jobs.dto';
 import type { ListBookingsAdminDto } from './dto/list-bookings-admin.dto';
 import type { BanUserDto } from './dto/ban-user.dto';
+import type { InviteAgentDto } from './dto/invite-agent.dto';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+// The pending agent-invite verification row outlives the magic-link token so it
+// is still there to consume when the invitee clicks through. It's deleted the
+// moment the link is used (user.create.before), so this is just a safety cap.
+const AGENT_INVITE_TTL_MS = 30 * 60 * 1000;
 
 @Injectable()
 export class AdminService {
@@ -24,6 +34,7 @@ export class AdminService {
     private readonly prisma: PrismaService,
     private readonly stripe: StripeService,
     private readonly storage: StorageService,
+    private readonly config: AppConfigService,
   ) {}
 
   // ---- Overview / KPIs -----------------------------------------------------
@@ -284,6 +295,74 @@ export class AdminService {
         activeJobs,
       };
     });
+  }
+
+  // Invite an agent by email. Two paths:
+  //  - the email already has an account → promote it to agent in place (no
+  //    magic link — they already have credentials) and email a heads-up;
+  //  - brand-new email → stash a pending-invite row and trigger the magic-link
+  //    signup flow, which lands them on set-password and (via
+  //    user.create.before in auth.ts) creates the user with role:'agent'.
+  async inviteAgent({ email, businessName }: InviteAgentDto) {
+    // Emails are stored/normalized lowercase by better-auth, and the pending
+    // row is keyed by email and later looked up with the created user's stored
+    // email — so key everything off the same lowercased value.
+    const normalizedEmail = email.trim().toLowerCase();
+    const trimmedBusinessName = businessName?.trim() || undefined;
+
+    const existing = await this.prisma.user.findFirst({
+      where: { email: { equals: normalizedEmail, mode: 'insensitive' } },
+      select: { id: true, role: true },
+    });
+
+    if (existing) {
+      if (existing.role === 'admin') {
+        throw new BadRequestException(
+          'This email belongs to an admin and cannot be invited as an agent.',
+        );
+      }
+      // Already an agent — idempotent success, no email, no duplicate.
+      if (existing.role === 'agent') {
+        return { status: true, outcome: 'already_agent' as const };
+      }
+      // Existing customer → promote in place.
+      await this.prisma.user.update({
+        where: { id: existing.id },
+        data: { role: 'agent' },
+      });
+      await sendAgentPromotedEmail(
+        normalizedEmail,
+        `${this.config.appUrl}/login`,
+      );
+      return { status: true, outcome: 'promoted' as const };
+    }
+
+    // New agent: (re)write the pending-invite row, then fire the magic link.
+    // deleteMany first so repeat invites for the same email don't accumulate
+    // orphaned rows.
+    const identifier = pendingAgentInviteIdentifier(normalizedEmail);
+    await this.prisma.verification.deleteMany({ where: { identifier } });
+    await this.prisma.verification.create({
+      data: {
+        id: randomUUID(),
+        identifier,
+        value: JSON.stringify({ businessName: trimmedBusinessName }),
+        expiresAt: new Date(Date.now() + AGENT_INVITE_TTL_MS),
+      },
+    });
+
+    const callbackURL = `${this.config.appUrl}/set-password?email=${encodeURIComponent(
+      normalizedEmail,
+    )}`;
+    // Server-initiated call (no inbound request), so pass empty headers — the
+    // endpoint's type requires the property, and there's no browser origin/CSRF
+    // context to forward here.
+    await auth.api.signInMagicLink({
+      body: { email: normalizedEmail, callbackURL },
+      headers: {},
+    });
+
+    return { status: true, outcome: 'invited' as const };
   }
 
   // ---- Bookings ------------------------------------------------------------
