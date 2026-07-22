@@ -20,6 +20,9 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/generated ./generated
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
+# scripts/ holds the deploy-time seeders (seed-admin.mjs) invoked by the
+# entrypoint; without this they'd be missing from the runtime image.
+COPY --from=build /app/scripts ./scripts
 COPY package.json ./
 COPY prisma.config.ts ./
 COPY docker-entrypoint.sh ./
