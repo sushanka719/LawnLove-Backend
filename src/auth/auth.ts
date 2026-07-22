@@ -194,15 +194,38 @@ export const auth = betterAuth({
   // SameSite=Lax (the default) drops cookies set during the initial
   // cross-site fetch to /sign-in/social, which breaks the OAuth state-cookie
   // check on callback (`state_mismatch`) and would equally break the session
-  // cookie for any cross-site fetch-based auth call.
+  // cookie for any cross-site fetch-based auth call. So in production we always
+  // use SameSite=None + Secure.
   //
-  // Backend (railway.app) and frontend (gettola.app) are on different
-  // registrable domains, not shared subdomains — crossSubDomainCookies can't
-  // apply here (the browser rejects a Domain=.gettola.app cookie set by a
-  // railway.app response), so the cookie stays host-only on the backend's
-  // domain. SameSite=None still lets it round-trip on cross-site requests.
+  // Cookie DOMAIN scope depends on the deployment topology:
+  //
+  // - When the frontend and backend live on sibling subdomains of one parent
+  //   (e.g. frontend staging.lawnlove.gettola.app + backend
+  //   staging.backend.lawnlove.gettola.app, sharing lawnlove.gettola.app), set
+  //   COOKIE_DOMAIN=.lawnlove.gettola.app. better-auth then emits the session
+  //   cookie with that Domain so BOTH subdomains receive it. This is REQUIRED
+  //   for the Next.js middleware (proxy.ts) to work: that middleware runs on
+  //   the frontend origin and forwards the browser's cookies to
+  //   /api/auth/get-session — a host-only backend cookie is never present in
+  //   those requests, so without a shared Domain every /dashboard hit is seen
+  //   as unauthenticated and bounced to /login.
+  //
+  // - When frontend and backend are on different registrable domains (e.g. a
+  //   Vercel frontend + gettola.app backend), leave COOKIE_DOMAIN unset. The
+  //   browser would reject a cross-registrable-domain Domain cookie, so it
+  //   stays host-only; SameSite=None still lets direct browser->backend calls
+  //   round-trip it (but the middleware SSR session check can't work in that
+  //   topology — do the auth check client-side there).
   advanced: isProduction
     ? {
+        ...(process.env.COOKIE_DOMAIN
+          ? {
+              crossSubDomainCookies: {
+                enabled: true,
+                domain: process.env.COOKIE_DOMAIN,
+              },
+            }
+          : {}),
         defaultCookieAttributes: {
           sameSite: 'none',
           secure: true,
