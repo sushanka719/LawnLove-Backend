@@ -93,8 +93,16 @@ export class BookingService {
         select: { id: true },
       });
 
+      // Visit #1 — dated from the customer's chosen date. An employee is picked
+      // by the scheduler once payment lands (see the Stripe webhook); recurring
+      // bookings get visits #2+ from the daily rolling-window cron.
       await tx.job.create({
-        data: { bookingId: created.id, status: 'assigned' },
+        data: {
+          bookingId: created.id,
+          visitNumber: 1,
+          scheduledDate: scheduleDate,
+          status: 'assigned',
+        },
       });
 
       return created;
@@ -256,10 +264,12 @@ export class BookingService {
         status: true,
         createdAt: true,
         jobs: {
-          orderBy: { createdAt: 'desc' },
+          orderBy: { visitNumber: 'asc' },
           select: {
             id: true,
             status: true,
+            visitNumber: true,
+            scheduledDate: true,
             completedAt: true,
             amount: true,
             review: { select: { rating: true } },

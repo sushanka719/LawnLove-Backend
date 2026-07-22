@@ -13,10 +13,12 @@ import { AddressesModule } from './addresses/addresses.module';
 import { AdminModule } from './admin/admin.module';
 import { AgentModule } from './agent/agent.module';
 import { BookingModule } from './booking/booking.module';
+import { EmployeesModule } from './employees/employees.module';
 import { PlansModule } from './plans/plans.module';
 import { PaymentMethodsModule } from './payment-methods/payment-methods.module';
 import { PayoutModule } from './payout/payout.module';
 import { ProfileModule } from './profile/profile.module';
+import { SchedulerModule } from './scheduler/scheduler.module';
 import { AppConfigModule } from './config/config.module';
 import { AppConfigService } from './config/config.service';
 import { HealthModule } from './health/health.module';
@@ -44,6 +46,8 @@ import { PrismaModule } from './prisma/prisma.module';
     AdminModule,
     PayoutModule,
     ProfileModule,
+    EmployeesModule,
+    SchedulerModule,
     AuthModule.forRoot({
       auth,
       // Capture the exact raw request buffer on `req.rawBody` (via body-parser's
