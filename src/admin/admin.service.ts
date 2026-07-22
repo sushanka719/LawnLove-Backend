@@ -144,6 +144,14 @@ export class AdminService {
           payoutsEnabled: true,
           createdAt: true,
           _count: { select: { bookings: true, jobs: true } },
+          // The user's default saved address (their "home" location). Ordering
+          // mirrors AddressesService.list so row 0 is the flagged default, or
+          // the most recent address if none is explicitly flagged.
+          savedAddresses: {
+            orderBy: [{ isDefault: 'desc' as const }, { createdAt: 'desc' as const }],
+            take: 1,
+            select: { address: true },
+          },
         },
       }),
       this.prisma.user.count({ where }),
@@ -160,6 +168,7 @@ export class AdminService {
       createdAt: u.createdAt,
       bookingsCount: u._count.bookings,
       jobsCount: u._count.jobs,
+      location: u.savedAddresses[0]?.address ?? null,
     }));
 
     return {
