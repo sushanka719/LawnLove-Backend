@@ -2,7 +2,7 @@ import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const FROM = process.env.MAIL_FROM ?? 'LawnHate <onboarding@resend.dev>';
+const FROM = process.env.MAIL_FROM ?? 'LawnLove <onboarding@resend.dev>';
 
 async function send(to: string, subject: string, html: string) {
   const { error } = await resend.emails.send({ from: FROM, to, subject, html });
@@ -25,6 +25,108 @@ export async function sendResetPasswordEmail(to: string, url: string) {
     'Reset your password',
     `<p>Click the link below to reset your password:</p><p><a href="${url}">${url}</a></p><p>If you didn't request this, you can ignore this email.</p>`,
   );
+}
+
+// Business name is admin-supplied free text that gets interpolated into the
+// email HTML below, so escape it before it lands in the markup.
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Shared branded shell for simple "heading + copy + one CTA button" emails,
+// styled to match sendInvoiceEmail (LawnLove green header, inline styles only —
+// email clients strip <style>/class-based CSS). `bodyHtml` is trusted markup
+// assembled by the caller; interpolate user input through escapeHtml first.
+function renderActionEmail(opts: {
+  eyebrow: string;
+  heading: string;
+  bodyHtml: string;
+  buttonLabel: string;
+  buttonUrl: string;
+  footerNote: string;
+}): string {
+  return `
+  <div style="margin:0;padding:24px;background-color:#f4f2ea;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background-color:#fffcf5;border-radius:16px;overflow:hidden;box-shadow:0 4px 16px rgba(74,74,74,0.14);">
+      <tr>
+        <td style="background-color:#195134;padding:24px 32px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="color:#ffffff;font-size:20px;font-weight:700;letter-spacing:-0.3px;">LawnLove</td>
+              <td style="color:#a7d7bf;font-size:13px;font-weight:600;text-align:right;text-transform:uppercase;letter-spacing:0.5px;">${opts.eyebrow}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:32px;">
+          <h1 style="margin:0 0 12px;color:#195134;font-size:22px;font-weight:700;letter-spacing:-0.4px;">${opts.heading}</h1>
+          ${opts.bodyHtml}
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:24px 0 4px;">
+            <tr>
+              <td align="center">
+                <a href="${opts.buttonUrl}" style="display:inline-block;background-color:#195134;color:#ffffff;text-decoration:none;font-size:15px;font-weight:600;padding:12px 28px;border-radius:12px;">
+                  ${opts.buttonLabel}
+                </a>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:20px 32px;background-color:#f4f2ea;color:#8a8a8a;font-size:12px;line-height:18px;">
+          ${opts.footerNote}
+        </td>
+      </tr>
+    </table>
+  </div>`;
+}
+
+const PARAGRAPH_STYLE =
+  'margin:0 0 12px;color:#4a4a4a;font-size:15px;line-height:22px;';
+
+// New-agent invite: the magic link (`url`) signs them in and lands them on the
+// set-password page. Sent from the sendMagicLink callback when a pending
+// agent-invite verification row exists for the email (see auth.ts).
+export async function sendAgentInviteEmail(
+  to: string,
+  url: string,
+  businessName?: string,
+) {
+  const intro = businessName
+    ? `You've been invited to bring <strong>${escapeHtml(businessName)}</strong> onto LawnLove as a lawn care agent.`
+    : `You've been invited to become a lawn care agent on LawnLove.`;
+  const html = renderActionEmail({
+    eyebrow: 'Agent invitation',
+    heading: 'Set up your agent account',
+    bodyHtml:
+      `<p style="${PARAGRAPH_STYLE}">${intro}</p>` +
+      `<p style="${PARAGRAPH_STYLE}">Click below to finish setting up your account, choose a password, and open your agent dashboard.</p>`,
+    buttonLabel: 'Set up your account',
+    buttonUrl: url,
+    footerNote: `This invitation was sent to ${to}. If you weren't expecting it, you can safely ignore this email.`,
+  });
+  await send(to, "You're invited to join LawnLove as an agent", html);
+}
+
+// Existing user promoted to agent: they already have login credentials (or
+// Google), so there's no magic link or set-password step — just a nudge to sign
+// in. `loginUrl` points at the app's /login page.
+export async function sendAgentPromotedEmail(to: string, loginUrl: string) {
+  const html = renderActionEmail({
+    eyebrow: 'Agent access',
+    heading: "You're now a LawnLove agent",
+    bodyHtml: `<p style="${PARAGRAPH_STYLE}">Your account has been upgraded to a lawn care agent. Sign in to open your agent dashboard and start taking jobs.</p>`,
+    buttonLabel: 'Sign in',
+    buttonUrl: loginUrl,
+    footerNote: `This notification was sent to ${to}.`,
+  });
+  await send(to, "You're now a LawnLove agent", html);
 }
 
 function formatMoney(cents: number): string {
@@ -66,7 +168,7 @@ export async function sendInvoiceEmail(to: string, invoice: InvoiceEmailData) {
         <td style="background-color:#195134;padding:24px 32px;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             <tr>
-              <td style="color:#ffffff;font-size:20px;font-weight:700;letter-spacing:-0.3px;">LawnHate</td>
+              <td style="color:#ffffff;font-size:20px;font-weight:700;letter-spacing:-0.3px;">LawnLove</td>
               <td style="color:#a7d7bf;font-size:13px;font-weight:600;text-align:right;text-transform:uppercase;letter-spacing:0.5px;">Payment receipt</td>
             </tr>
           </table>
@@ -122,7 +224,7 @@ export async function sendInvoiceEmail(to: string, invoice: InvoiceEmailData) {
     </table>
   </div>`;
 
-  await send(to, `Your LawnHate receipt · ${invoice.invoiceNumber}`, html);
+  await send(to, `Your LawnLove receipt · ${invoice.invoiceNumber}`, html);
 }
 
 export async function sendPayoutReleasedEmail(to: string, amountLabel: string) {
