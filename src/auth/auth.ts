@@ -173,22 +173,16 @@ export const auth = betterAuth({
   // check on callback (`state_mismatch`) and would equally break the session
   // cookie for any cross-site fetch-based auth call.
   //
-  // Frontend and backend are on different subdomains of the shared gettola.app
-  // registrable domain (e.g. staging.lawnlove.gettola.app vs
-  // backend.lawn.gettola.app), so without crossSubDomainCookies the session
-  // cookie defaults to host-only and is scoped strictly to
-  // backend.lawn.gettola.app — the frontend's own server (e.g. its
-  // middleware/proxy checking auth) never receives it. Setting `domain` to
-  // the shared parent makes the cookie visible to any gettola.app subdomain.
+  // Backend (railway.app) and frontend (gettola.app) are on different
+  // registrable domains, not shared subdomains — crossSubDomainCookies can't
+  // apply here (the browser rejects a Domain=.gettola.app cookie set by a
+  // railway.app response), so the cookie stays host-only on the backend's
+  // domain. SameSite=None still lets it round-trip on cross-site requests.
   advanced: isProduction
     ? {
         defaultCookieAttributes: {
           sameSite: 'none',
           secure: true,
-        },
-        crossSubDomainCookies: {
-          enabled: true,
-          domain: '.gettola.app',
         },
       }
     : {
