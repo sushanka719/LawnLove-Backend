@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { Session } from '@thallesp/nestjs-better-auth';
 import { auth } from '../auth/auth';
 import { BookingService } from './booking.service';
@@ -19,6 +27,13 @@ export class BookingController {
     @Session() session: AuthSession,
     @Body() dto: CreateBookingDto,
   ) {
+    // Booking is a customer action. Admins run the ops console and must not be
+    // able to place bookings as if they were a normal customer — the frontend
+    // proxy already keeps them out of the booking flow, and this rejects a
+    // direct API call for defence in depth. Agents can still book as customers.
+    if (session.user.role === 'admin') {
+      throw new ForbiddenException('Admins cannot create bookings.');
+    }
     return this.bookingService.createBooking(session.user, dto);
   }
 
