@@ -7,6 +7,7 @@ import { AssignJobDto } from './dto/assign-job.dto';
 import { ListUsersDto } from './dto/list-users.dto';
 import { ListJobsDto } from './dto/list-jobs.dto';
 import { ListBookingsAdminDto } from './dto/list-bookings-admin.dto';
+import { InviteAgentDto } from './dto/invite-agent.dto';
 
 // Admin-only ops console API. The whole controller is @Roles(['admin']); the
 // global AuthGuard 401s the unauthenticated and this 403s non-admins. The first
@@ -52,6 +53,13 @@ export class AdminController {
   @Get('agents')
   listAgents() {
     return this.adminService.listAgents();
+  }
+
+  // Invite a new agent by email (magic link → set password → /agent), or
+  // promote an existing user account to agent.
+  @Post('agents/invite')
+  inviteAgent(@Body() dto: InviteAgentDto) {
+    return this.adminService.inviteAgent(dto);
   }
 
   // ---- Bookings ------------------------------------------------------------
