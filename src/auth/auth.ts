@@ -1,3 +1,4 @@
+import { expo } from '@better-auth/expo';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { betterAuth } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
@@ -371,6 +372,14 @@ export const auth = betterAuth({
     },
   },
   plugins: [
+    // Expo/React Native sends its scheme (e.g. `lawnlove://`) as an
+    // `expo-origin` header instead of a real `Origin` header, since native
+    // requests don't have one. Without this plugin, better-auth's origin
+    // check sees a missing/null Origin and rejects with
+    // MISSING_OR_NULL_ORIGIN — CORS_ORIGIN/trustedOrigins alone can't fix
+    // this, since that just allowlists origins, it doesn't teach better-auth
+    // to read the origin from a different header for native clients.
+    expo(),
     magicLink({
       sendMagicLink: async ({ email, url }) => {
         // Agent invites reuse the magic-link flow but need their own email
