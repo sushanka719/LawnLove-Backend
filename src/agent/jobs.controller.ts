@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { Roles, Session } from '@thallesp/nestjs-better-auth';
 import { auth } from '../auth/auth';
 import { JobsService } from './jobs.service';
@@ -14,8 +14,11 @@ export class JobsController {
   constructor(private readonly jobsService: JobsService) {}
 
   @Get()
-  listJobs(@Session() session: AuthSession) {
-    return this.jobsService.listMyJobs(session.user.id);
+  listJobs(
+    @Session() session: AuthSession,
+    @Query('unassigned') unassigned?: string,
+  ) {
+    return this.jobsService.listMyJobs(session.user.id, unassigned === 'true');
   }
 
   @Get(':id')

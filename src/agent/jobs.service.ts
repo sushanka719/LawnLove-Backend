@@ -35,18 +35,22 @@ export class JobsService {
     private readonly config: AppConfigService,
   ) {}
 
-  // All jobs assigned to this agent, grouped by status for the dashboard.
-  async listMyJobs(agentId: string) {
+  // All jobs owned by this agent, newest first, for the dashboard. Pass
+  // `unassigned` to show only visits still awaiting an employee.
+  async listMyJobs(agentId: string, unassigned = false) {
     const jobs = await this.prisma.job.findMany({
-      where: { agentId },
+      where: { agentId, ...(unassigned ? { employeeId: null } : {}) },
       orderBy: { createdAt: 'desc' },
       select: {
         id: true,
         status: true,
+        scheduledDate: true,
+        visitNumber: true,
         startedAt: true,
         completedAt: true,
         reviewDeadline: true,
         createdAt: true,
+        employee: { select: { id: true, name: true } },
         booking: {
           select: {
             address: true,
@@ -78,9 +82,14 @@ export class JobsService {
     return {
       id: job.id,
       status: job.status,
+      scheduledDate: job.scheduledDate,
+      visitNumber: job.visitNumber,
       startedAt: job.startedAt,
       completedAt: job.completedAt,
       reviewDeadline: job.reviewDeadline,
+      employee: job.employee
+        ? { id: job.employee.id, name: job.employee.name }
+        : null,
       booking: {
         address: job.booking.address,
         scheduleDate: job.booking.scheduleDate,
@@ -99,7 +108,7 @@ export class JobsService {
   private async loadOwnedJob(jobId: string, agentId: string) {
     const job = await this.prisma.job.findUnique({
       where: { id: jobId },
-      include: { booking: true, photos: true },
+      include: { booking: true, photos: true, employee: true },
     });
     if (!job) {
       throw new NotFoundException('Job not found.');
