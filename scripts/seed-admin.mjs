@@ -111,9 +111,14 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  // better-auth surfaces validation/conflict errors with a `.message`.
-  const message =
-    err?.body?.message || err?.message || String(err) || "Unknown error";
-  fail(`Seed failed: ${message}`);
-});
+main()
+  // Force a clean exit: the imported auth module holds an open Postgres pool
+  // that would otherwise keep Node alive, stalling the Docker entrypoint before
+  // it starts the app. Harmless for manual `pnpm seed:admin` runs too.
+  .then(() => process.exit(0))
+  .catch((err) => {
+    // better-auth surfaces validation/conflict errors with a `.message`.
+    const message =
+      err?.body?.message || err?.message || String(err) || "Unknown error";
+    fail(`Seed failed: ${message}`);
+  });
