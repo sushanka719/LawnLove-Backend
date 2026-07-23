@@ -3,12 +3,12 @@
 // booking flow populated after the switch to admin-managed Plan records.
 //
 // Prices are in CENTS. Final per-visit charge = basePrice + the surcharge of the
-// area tier the measured lawn falls into. These are sensible starting values —
-// admins can edit them in the console; the real data migration of legacy
-// bookings happens in the pricing-switch phase.
+// area tier the measured lawn falls into. The area surcharge ladder is GLOBAL
+// (a single shared PricingConfig), not per-plan. These are sensible starting
+// values — admins can edit them in the console under Settings → Pricing.
 //
-// Idempotent: upserts each plan by its unique slug and fully rewrites that
-// plan's area tiers, so re-running is safe.
+// Idempotent: upserts each plan by its unique slug and rewrites the single
+// global pricing config, so re-running is safe.
 //
 // Usage (from the LawnBackend directory):
 //   pnpm seed:plans
@@ -27,13 +27,17 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
-// Shared, non-overlapping area brackets applied to every plan. surcharge cents.
+// The single global, non-overlapping area surcharge ladder shared by every
+// plan (cents). Lives in PricingConfig ("singleton"), not on any plan.
 const AREA_TIERS = [
   { minSqFt: 0, maxSqFt: 2500, surcharge: 0 },
   { minSqFt: 2500, maxSqFt: 5000, surcharge: 1500 },
   { minSqFt: 5000, maxSqFt: 10000, surcharge: 3500 },
   { minSqFt: 10000, maxSqFt: null, surcharge: 6000 },
 ];
+
+// null = no maximum serviceable area (never block a booking for being too big).
+const MAX_AREA_SQFT = null;
 
 const PLANS = [
   {
@@ -111,15 +115,22 @@ async function upsertPlan(client, plan) {
   return rows[0].id;
 }
 
-async function replaceTiers(client, planId) {
-  await client.query(`DELETE FROM "plan_area_tier" WHERE "planId" = $1`, [
-    planId,
-  ]);
+// Upsert the single global pricing config and rewrite its area tier ladder.
+async function seedPricingConfig(client) {
+  await client.query(
+    `INSERT INTO "pricing_config" (id, "maxAreaSqFt", "updatedAt")
+     VALUES ('singleton', $1, now())
+     ON CONFLICT (id) DO UPDATE SET
+       "maxAreaSqFt" = EXCLUDED."maxAreaSqFt",
+       "updatedAt" = now()`,
+    [MAX_AREA_SQFT],
+  );
+  await client.query(`DELETE FROM "area_tier" WHERE "configId" = 'singleton'`);
   for (const tier of AREA_TIERS) {
     await client.query(
-      `INSERT INTO "plan_area_tier" (id, "planId", "minSqFt", "maxSqFt", surcharge)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [randomUUID(), planId, tier.minSqFt, tier.maxSqFt, tier.surcharge],
+      `INSERT INTO "area_tier" (id, "configId", "minSqFt", "maxSqFt", surcharge)
+       VALUES ($1, 'singleton', $2, $3, $4)`,
+      [randomUUID(), tier.minSqFt, tier.maxSqFt, tier.surcharge],
     );
   }
 }
@@ -129,11 +140,13 @@ async function main() {
   await client.connect();
   try {
     for (const plan of PLANS) {
-      const id = await upsertPlan(client, plan);
-      await replaceTiers(client, id);
+      await upsertPlan(client, plan);
       console.log(`  ✔ ${plan.name} (${plan.slug}) — $${(plan.basePrice / 100).toFixed(2)} base`);
     }
-    console.log(`\n✔ Seeded ${PLANS.length} plans, each with ${AREA_TIERS.length} area tiers.\n`);
+    await seedPricingConfig(client);
+    console.log(
+      `\n✔ Seeded ${PLANS.length} plans + global pricing config (${AREA_TIERS.length} area tiers).\n`,
+    );
   } finally {
     await client.end();
   }

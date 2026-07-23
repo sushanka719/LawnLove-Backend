@@ -1,4 +1,3 @@
-import { Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
@@ -10,13 +9,11 @@ import {
   MaxLength,
   Min,
   MinLength,
-  ValidateNested,
 } from 'class-validator';
 import {
   PlanBillingType,
   PlanInterval,
 } from '../../../generated/prisma/client';
-import { AreaTierDto } from './area-tier.dto';
 
 // Lowercase kebab-case, e.g. "weekly-mow". Optional on create — derived from the
 // name when omitted (see PlansService.create).
@@ -68,10 +65,4 @@ export class CreatePlanDto {
   @IsInt()
   @Min(0)
   sortOrder?: number;
-
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => AreaTierDto)
-  areaTiers?: AreaTierDto[];
 }
