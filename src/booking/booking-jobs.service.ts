@@ -28,6 +28,8 @@ export class BookingJobsService {
       select: {
         id: true,
         status: true,
+        scheduledDate: true,
+        visitNumber: true,
         completedAt: true,
         reviewDeadline: true,
         review: { select: { rating: true } },
@@ -75,6 +77,8 @@ export class BookingJobsService {
     return {
       id: job.id,
       status: job.status,
+      scheduledDate: job.scheduledDate,
+      visitNumber: job.visitNumber,
       completedAt: job.completedAt,
       reviewDeadline: job.reviewDeadline,
       amount: job.amount,

@@ -148,7 +148,10 @@ export class AdminService {
           // mirrors AddressesService.list so row 0 is the flagged default, or
           // the most recent address if none is explicitly flagged.
           savedAddresses: {
-            orderBy: [{ isDefault: 'desc' as const }, { createdAt: 'desc' as const }],
+            orderBy: [
+              { isDefault: 'desc' as const },
+              { createdAt: 'desc' as const },
+            ],
             take: 1,
             select: { address: true },
           },
@@ -463,11 +466,18 @@ export class AdminService {
     if (booking.status === 'cancelled') {
       throw new BadRequestException('Booking is already cancelled.');
     }
-    return this.prisma.booking.update({
+    const updated = await this.prisma.booking.update({
       where: { id: bookingId },
       data: { status: 'cancelled' },
       select: { id: true, status: true },
     });
+    // Drop still-scheduled visits so the scheduler stops maintaining them and
+    // they vanish from dashboards. Only not-yet-started ('assigned') visits are
+    // removed — started/completed/charged visits keep their record.
+    await this.prisma.job.deleteMany({
+      where: { bookingId, status: 'assigned' },
+    });
+    return updated;
   }
 
   // ---- Jobs (dispatch) -----------------------------------------------------
@@ -488,10 +498,13 @@ export class AdminService {
         select: {
           id: true,
           status: true,
+          scheduledDate: true,
+          visitNumber: true,
           createdAt: true,
           completedAt: true,
           amount: true,
           agent: { select: { id: true, name: true, email: true } },
+          employee: { select: { id: true, name: true } },
           booking: {
             select: {
               address: true,
@@ -508,10 +521,13 @@ export class AdminService {
     const items = rows.map((j) => ({
       id: j.id,
       status: j.status,
+      scheduledDate: j.scheduledDate,
+      visitNumber: j.visitNumber,
       createdAt: j.createdAt,
       completedAt: j.completedAt,
       amount: j.amount,
       agent: j.agent,
+      employee: j.employee,
       address: j.booking.address,
       scheduleDate: j.booking.scheduleDate,
       timeSlot: j.booking.timeSlot,
@@ -532,6 +548,7 @@ export class AdminService {
       where: { id: jobId },
       include: {
         agent: { select: { id: true, name: true, email: true } },
+        employee: { select: { id: true, name: true } },
         booking: {
           select: {
             id: true,
@@ -569,6 +586,8 @@ export class AdminService {
     return {
       id: job.id,
       status: job.status,
+      scheduledDate: job.scheduledDate,
+      visitNumber: job.visitNumber,
       startedAt: job.startedAt,
       completedAt: job.completedAt,
       reviewDeadline: job.reviewDeadline,
@@ -582,6 +601,7 @@ export class AdminService {
       stripeTransferId: job.stripeTransferId,
       reference: bookingReference(job.bookingId),
       agent: job.agent,
+      employee: job.employee,
       booking: {
         id: job.booking.id,
         title: bookingServiceLabel(job.booking.frequency),
