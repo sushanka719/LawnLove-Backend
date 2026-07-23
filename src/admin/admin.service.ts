@@ -8,16 +8,21 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StripeService } from '../stripe/stripe.service';
 import { StorageService } from '../storage/storage.service';
 import { AppConfigService } from '../config/config.service';
+import { PayoutService } from '../payout/payout.service';
+import { SchedulerService } from '../scheduler/scheduler.service';
+import { SettingsService } from '../settings/settings.service';
 import {
   bookingReference,
   bookingServiceLabel,
 } from '../booking/booking-format';
+import { addUtcDays, startOfUtcDay } from '../scheduler/scheduling.util';
 import { auth, pendingAgentInviteIdentifier } from '../auth/auth';
 import { sendAgentPromotedEmail } from '../mail/mail.service';
 import type { AssignableRole } from './dto/set-role.dto';
 import type { ListUsersDto } from './dto/list-users.dto';
 import type { ListJobsDto } from './dto/list-jobs.dto';
 import type { ListBookingsAdminDto } from './dto/list-bookings-admin.dto';
+import type { ReassignJobDto } from './dto/reassign-job.dto';
 import type { BanUserDto } from './dto/ban-user.dto';
 import type { InviteAgentDto } from './dto/invite-agent.dto';
 
@@ -35,6 +40,9 @@ export class AdminService {
     private readonly stripe: StripeService,
     private readonly storage: StorageService,
     private readonly config: AppConfigService,
+    private readonly payout: PayoutService,
+    private readonly scheduler: SchedulerService,
+    private readonly settings: SettingsService,
   ) {}
 
   // ---- Overview / KPIs -----------------------------------------------------
@@ -46,7 +54,8 @@ export class AdminService {
       totalCustomers,
       jobsByStatus,
       bookingsByStatus,
-      moneyByStatus,
+      grossAgg,
+      owedAgg,
     ] = await this.prisma.$transaction([
       this.prisma.user.count(),
       this.prisma.user.count({ where: { role: 'agent' } }),
@@ -61,11 +70,16 @@ export class AdminService {
         _count: true,
         orderBy: { status: 'asc' },
       }),
-      // Charged/paid jobs carry the escrow money fields (cents).
-      this.prisma.job.groupBy({
-        by: ['status'],
-        _sum: { amount: true, platformFee: true },
-        orderBy: { status: 'asc' },
+      // Prepaid model: GMV is sourced from Booking.amountCharged (set by the
+      // Stripe webhook), NOT the escrow Job fields, which prepaid never fills.
+      this.prisma.booking.aggregate({
+        _sum: { amountCharged: true },
+        where: { status: { in: ['active', 'pastDue', 'completed'] } },
+      }),
+      // What we still owe agents: recorded per-visit payouts not yet marked paid.
+      this.prisma.job.aggregate({
+        _sum: { agentPayoutAmount: true },
+        where: { agentPayoutAmount: { not: null }, agentPaidAt: null },
       }),
     ]);
 
@@ -80,18 +94,14 @@ export class AdminService {
       bookingStatusCounts[row.status] = Number(row._count);
     }
 
-    // GMV = everything ever charged; platform fees = our cut on the same set.
-    let grossVolumeCents = 0;
-    let platformFeesCents = 0;
-    let pendingPayoutCents = 0;
-    for (const row of moneyByStatus) {
-      grossVolumeCents += row._sum?.amount ?? 0;
-      platformFeesCents += row._sum?.platformFee ?? 0;
-      // Funds held on-platform awaiting release (charged but not yet paid out).
-      if (row.status === 'in_review' || row.status === 'completed') {
-        pendingPayoutCents += row._sum?.amount ?? 0;
-      }
-    }
+    // GMV = charged across paid bookings; platform fees = our configured cut of
+    // it (there is no Booking.platformFee column); pending payout = owed to
+    // agents but not yet disbursed. The fee % is the admin-editable AppSettings
+    // value (seeded from PLATFORM_FEE_PCT).
+    const feePct = await this.settings.getEffectiveFeePct();
+    const grossVolumeCents = grossAgg._sum.amountCharged ?? 0;
+    const platformFeesCents = Math.round(grossVolumeCents * feePct);
+    const pendingPayoutCents = owedAgg._sum.agentPayoutAmount ?? 0;
 
     return {
       users: {
@@ -396,9 +406,17 @@ export class AdminService {
           scheduleDate: true,
           timeSlot: true,
           totalPerVisit: true,
+          amountCharged: true,
           status: true,
           createdAt: true,
           user: { select: { id: true, name: true, email: true } },
+          plan: { select: { name: true } },
+          // The servicing agent = the agent on the earliest visit.
+          jobs: {
+            take: 1,
+            orderBy: { visitNumber: 'asc' },
+            select: { agent: { select: { id: true, name: true, email: true } } },
+          },
           _count: { select: { jobs: true } },
         },
       }),
@@ -414,9 +432,12 @@ export class AdminService {
       scheduleDate: b.scheduleDate,
       timeSlot: b.timeSlot,
       totalPerVisit: b.totalPerVisit,
+      amountCharged: b.amountCharged,
       status: b.status,
       createdAt: b.createdAt,
       customer: b.user,
+      planName: b.plan?.name ?? null,
+      agent: b.jobs[0]?.agent ?? null,
       visitsCount: b._count.jobs,
     }));
 
@@ -583,6 +604,16 @@ export class AdminService {
         })),
     );
 
+    // The agent's active crew — options for the admin reassign (field-worker)
+    // dropdown on the job-detail screen.
+    const agentEmployees = job.agentId
+      ? await this.prisma.employee.findMany({
+          where: { agentId: job.agentId, active: true },
+          orderBy: { name: 'asc' },
+          select: { id: true, name: true },
+        })
+      : [];
+
     return {
       id: job.id,
       status: job.status,
@@ -597,11 +628,15 @@ export class AdminService {
       platformFee: job.platformFee,
       chargedAt: job.chargedAt,
       releasedAt: job.releasedAt,
+      agentPayoutAmount: job.agentPayoutAmount,
+      agentPaidAt: job.agentPaidAt,
+      agentPayoutRef: job.agentPayoutRef,
       stripePaymentIntentId: job.stripePaymentIntentId,
       stripeTransferId: job.stripeTransferId,
       reference: bookingReference(job.bookingId),
       agent: job.agent,
       employee: job.employee,
+      agentEmployees,
       booking: {
         id: job.booking.id,
         title: bookingServiceLabel(job.booking.frequency),
@@ -706,5 +741,204 @@ export class AdminService {
       data: { status: 'refunded' },
       select: { id: true, status: true },
     });
+  }
+
+  // ---- Payouts (deferred manual model) -------------------------------------
+
+  // Every visit that recorded a per-visit payout, owed-first. Includes the
+  // agent, address, and paid/unpaid state, plus owed/paid totals and a per-agent
+  // owed breakdown for the admin Payout screen.
+  async listPayouts() {
+    const jobs = await this.prisma.job.findMany({
+      where: { agentPayoutAmount: { not: null } },
+      orderBy: [
+        { agentPaidAt: { sort: 'asc', nulls: 'first' } },
+        { completedAt: 'desc' },
+      ],
+      select: {
+        id: true,
+        visitNumber: true,
+        scheduledDate: true,
+        completedAt: true,
+        agentPayoutAmount: true,
+        agentPaidAt: true,
+        agentPayoutRef: true,
+        agent: { select: { id: true, name: true, email: true } },
+        booking: { select: { address: true, frequency: true } },
+      },
+    });
+
+    const items = jobs.map((j) => ({
+      jobId: j.id,
+      reference: `PO-${j.id.slice(-6).toUpperCase()}`,
+      visitNumber: j.visitNumber,
+      serviceLabel: bookingServiceLabel(j.booking.frequency),
+      address: j.booking.address,
+      servicedOn: j.completedAt ?? j.scheduledDate,
+      amount: j.agentPayoutAmount ?? 0,
+      paid: j.agentPaidAt != null,
+      paidAt: j.agentPaidAt,
+      payoutRef: j.agentPayoutRef,
+      agent: j.agent,
+    }));
+
+    let owedCents = 0;
+    let paidCents = 0;
+    const byAgent = new Map<
+      string,
+      {
+        agentId: string | null;
+        name: string | null;
+        email: string | null;
+        owedCents: number;
+        owedCount: number;
+      }
+    >();
+    for (const it of items) {
+      if (it.paid) {
+        paidCents += it.amount;
+        continue;
+      }
+      owedCents += it.amount;
+      const key = it.agent?.id ?? 'unassigned';
+      const row = byAgent.get(key) ?? {
+        agentId: it.agent?.id ?? null,
+        name: it.agent?.name ?? null,
+        email: it.agent?.email ?? null,
+        owedCents: 0,
+        owedCount: 0,
+      };
+      row.owedCents += it.amount;
+      row.owedCount += 1;
+      byAgent.set(key, row);
+    }
+
+    return {
+      items,
+      totals: { owedCents, paidCents },
+      byAgent: Array.from(byAgent.values()),
+    };
+  }
+
+  // Mark a visit's payout as paid (manual/out-of-band — no real Stripe transfer
+  // yet). See PayoutService.disburse.
+  payoutJob(jobId: string, ref?: string) {
+    return this.payout.disburse(jobId, ref);
+  }
+
+  // ---- Reassign (field-worker override) ------------------------------------
+
+  // Set/clear a job's employee directly, or `auto` to re-run the scheduler's
+  // least-loaded picker. Distinct from assignJob, which sets the agent.
+  async reassignJob(jobId: string, dto: ReassignJobDto) {
+    const job = await this.prisma.job.findUnique({
+      where: { id: jobId },
+      select: { id: true, agentId: true, status: true },
+    });
+    if (!job) {
+      throw new NotFoundException('Job not found.');
+    }
+    if (!['assigned', 'started'].includes(job.status)) {
+      throw new BadRequestException(
+        `Cannot reassign a job with status "${job.status}".`,
+      );
+    }
+
+    if (dto.auto) {
+      const result = await this.scheduler.assignVisit(jobId);
+      const refreshed = await this.jobAssignment(jobId);
+      return { ...refreshed, autoResult: result };
+    }
+
+    if (dto.employeeId) {
+      if (!job.agentId) {
+        throw new BadRequestException(
+          'Assign an agent before choosing an employee.',
+        );
+      }
+      const emp = await this.prisma.employee.findFirst({
+        where: { id: dto.employeeId, agentId: job.agentId },
+        select: { id: true },
+      });
+      if (!emp) {
+        throw new BadRequestException("Employee not found for this job's agent.");
+      }
+    }
+
+    await this.prisma.job.update({
+      where: { id: jobId },
+      data: { employeeId: dto.employeeId ?? null },
+    });
+    return this.jobAssignment(jobId);
+  }
+
+  private jobAssignment(jobId: string) {
+    return this.prisma.job.findUniqueOrThrow({
+      where: { id: jobId },
+      select: {
+        id: true,
+        status: true,
+        agentId: true,
+        employeeId: true,
+        scheduledDate: true,
+        employee: { select: { id: true, name: true } },
+      },
+    });
+  }
+
+  // ---- Revenue time series -------------------------------------------------
+
+  // Gross volume bucketed by day (7d/30d) or month (12m) for the dashboard
+  // chart, sourced from charged bookings' amountCharged. Oldest bucket first.
+  async getRevenue(range?: string) {
+    const today = startOfUtcDay(new Date());
+    const isMonthly = range === '12m';
+    const points: { date: string; revenueCents: number }[] = [];
+    let start: Date;
+
+    if (isMonthly) {
+      const startMonth = new Date(
+        Date.UTC(today.getUTCFullYear(), today.getUTCMonth() - 11, 1),
+      );
+      start = startMonth;
+      for (let i = 0; i < 12; i++) {
+        const d = new Date(
+          Date.UTC(startMonth.getUTCFullYear(), startMonth.getUTCMonth() + i, 1),
+        );
+        points.push({
+          date: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`,
+          revenueCents: 0,
+        });
+      }
+    } else {
+      const days = range === '7d' ? 7 : 30;
+      start = addUtcDays(today, -(days - 1));
+      for (let i = 0; i < days; i++) {
+        points.push({
+          date: addUtcDays(start, i).toISOString().slice(0, 10),
+          revenueCents: 0,
+        });
+      }
+    }
+
+    const rows = await this.prisma.booking.findMany({
+      where: { amountCharged: { not: null }, createdAt: { gte: start } },
+      select: { createdAt: true, amountCharged: true },
+    });
+
+    const index = new Map(points.map((p, i) => [p.date, i]));
+    for (const r of rows) {
+      const key = isMonthly
+        ? `${r.createdAt.getUTCFullYear()}-${String(r.createdAt.getUTCMonth() + 1).padStart(2, '0')}`
+        : r.createdAt.toISOString().slice(0, 10);
+      const i = index.get(key);
+      if (i != null) points[i].revenueCents += r.amountCharged ?? 0;
+    }
+
+    return {
+      range: isMonthly ? '12m' : range === '7d' ? '7d' : '30d',
+      granularity: isMonthly ? 'month' : 'day',
+      points,
+    };
   }
 }

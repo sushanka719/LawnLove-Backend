@@ -65,6 +65,13 @@ export class CreateBookingDto {
   @IsEnum(BookingTimeSlot)
   timeSlot: BookingTimeSlot;
 
+  // Optional promo code. The discount is recomputed server-side from the code
+  // and the recomputed per-visit subtotal — the client-sent value is ignored.
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  promoCode?: string;
+
   // Accepted for forward-compat but recomputed server-side (never trusted).
   @IsOptional()
   @IsInt()

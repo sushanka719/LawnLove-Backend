@@ -4,6 +4,8 @@ import { AdminService } from './admin.service';
 import { SetRoleDto } from './dto/set-role.dto';
 import { BanUserDto } from './dto/ban-user.dto';
 import { AssignJobDto } from './dto/assign-job.dto';
+import { ReassignJobDto } from './dto/reassign-job.dto';
+import { PayoutJobDto } from './dto/payout-job.dto';
 import { ListUsersDto } from './dto/list-users.dto';
 import { ListJobsDto } from './dto/list-jobs.dto';
 import { ListBookingsAdminDto } from './dto/list-bookings-admin.dto';
@@ -21,6 +23,12 @@ export class AdminController {
   @Get('stats')
   getStats() {
     return this.adminService.getStats();
+  }
+
+  // Revenue time series for the dashboard chart. range = 7d | 30d | 12m.
+  @Get('stats/revenue')
+  getRevenue(@Query('range') range?: string) {
+    return this.adminService.getRevenue(range);
   }
 
   // ---- Users ---------------------------------------------------------------
@@ -94,10 +102,28 @@ export class AdminController {
     return this.adminService.assignJob(id, dto.agentId);
   }
 
+  // Set/clear the job's field-worker (employee), or re-run the scheduler (auto).
+  @Post('jobs/:id/reassign')
+  reassignJob(@Param('id') id: string, @Body() dto: ReassignJobDto) {
+    return this.adminService.reassignJob(id, dto);
+  }
+
+  // Mark a completed visit's per-visit payout as paid (deferred manual model).
+  @Post('jobs/:id/payout')
+  payoutJob(@Param('id') id: string, @Body() dto: PayoutJobDto) {
+    return this.adminService.payoutJob(id, dto.ref);
+  }
+
   // Refund a disputed job (before payout has been transferred to the agent).
   @Post('jobs/:id/refund')
   refundJob(@Param('id') id: string) {
     return this.adminService.refundJob(id);
+  }
+
+  // ---- Payouts -------------------------------------------------------------
+  @Get('payouts')
+  listPayouts() {
+    return this.adminService.listPayouts();
   }
 
   // ---- Disputes ------------------------------------------------------------

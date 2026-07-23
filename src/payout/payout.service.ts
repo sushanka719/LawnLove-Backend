@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   Injectable,
@@ -12,6 +13,12 @@ export type ReleaseResult = {
   status: string;
   paid: boolean;
   reason?: string;
+};
+
+export type DisburseResult = {
+  jobId: string;
+  paid: boolean;
+  amount: number; // cents
 };
 
 // Shared "release held funds to the agent" logic — used by both the customer
@@ -102,5 +109,41 @@ export class PayoutService {
     }
 
     return { status: 'paid', paid: true };
+  }
+
+  // Deferred per-visit payout for the prepaid model. Admins mark an owed visit
+  // as paid out-of-band (bank transfer, etc.); there is no real Stripe transfer
+  // yet — this only records that the payout happened (agentPaidAt + a reference).
+  // Idempotent: marking an already-paid visit is a no-op that returns paid.
+  async disburse(jobId: string, ref?: string): Promise<DisburseResult> {
+    const job = await this.prisma.job.findUnique({
+      where: { id: jobId },
+      select: { id: true, agentPayoutAmount: true, agentPaidAt: true },
+    });
+    if (!job) {
+      throw new NotFoundException('Job not found.');
+    }
+    if (job.agentPayoutAmount == null) {
+      throw new BadRequestException(
+        'This visit has no recorded payout amount to disburse.',
+      );
+    }
+    if (job.agentPaidAt) {
+      return { jobId, paid: true, amount: job.agentPayoutAmount };
+    }
+
+    await this.prisma.job.update({
+      where: { id: jobId },
+      data: {
+        agentPaidAt: new Date(),
+        agentPayoutRef: ref?.trim() || `manual-${randomUUID().slice(0, 8)}`,
+      },
+    });
+
+    this.logger.log(
+      `Marked payout paid for job ${jobId} (${job.agentPayoutAmount}¢).`,
+    );
+
+    return { jobId, paid: true, amount: job.agentPayoutAmount };
   }
 }
