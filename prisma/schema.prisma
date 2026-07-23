@@ -55,6 +55,9 @@ model User {
   savedAddresses         SavedAddress[]
   // Employees the agent manages (single-agent MVP). No login — see Employee.
   employees              Employee[]     @relation("AgentEmployees")
+  // Service catalog the agent offers. Display/marketing catalog only — customer
+  // bookings are driven by Plans, not these rows.
+  services               Service[]      @relation("AgentServices")
 
   @@unique([email])
   @@unique([username])
@@ -187,6 +190,12 @@ model Booking {
   stripeSubscriptionId  String?
   stripePaymentIntentId String?
   amountCharged         Int? // cents actually charged (set by the Stripe webhook)
+  // Applied promo code (optional). discountAmount is the CENTS taken off the
+  // per-visit charge (basePrice + areaSurcharge − discountAmount), recomputed
+  // server-side at booking time; never trust a client-sent discount.
+  promoCodeId           String?
+  promoCode             PromoCode?       @relation(fields: [promoCodeId], references: [id])
+  discountAmount        Int              @default(0)
   status                BookingStatus    @default(pendingPayment)
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
@@ -195,6 +204,7 @@ model Booking {
   @@index([userId])
   @@index([planId])
   @@index([stripeSubscriptionId])
+  @@index([promoCodeId])
   @@map("booking")
 }
 
@@ -367,4 +377,70 @@ model AreaTier {
 
   @@index([configId])
   @@map("area_tier")
+}
+
+// An agent's offered-services catalog, managed from the agent dashboard's
+// "Service" screen. This is a display/marketing catalog only — actual customer
+// bookings run through Plans + PricingConfig, not these rows. Belongs to one
+// agent (single-agent MVP, mirrors Employee).
+model Service {
+  id          String   @id @default(cuid())
+  agentId     String
+  agent       User     @relation("AgentServices", fields: [agentId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  price       Int // cents
+  unit        String   @default("per visit") // e.g. "per visit", "per sq ft"
+  active      Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([agentId])
+  @@map("service")
+}
+
+// Single global platform settings, enforced as a singleton via the fixed id
+// "singleton" (mirrors PricingConfig). Backs the admin Settings screen. When
+// set, platformFeePct overrides the PLATFORM_FEE_PCT env default at read time.
+model AppSettings {
+  id             String   @id @default("singleton")
+  platformName   String   @default("LawnLove")
+  supportEmail   String?
+  // Commission the platform keeps on each visit (0..1). Overrides env when read.
+  platformFeePct Float    @default(0.2)
+  // Master switch for agent payouts (the deferred manual-payout flow honors it).
+  payoutsEnabled Boolean  @default(false)
+  // Informational for the MVP (payouts are admin-initiated): manual|daily|weekly.
+  payoutSchedule String   @default("manual")
+  updatedAt      DateTime @updatedAt
+
+  @@map("app_settings")
+}
+
+enum PromoType {
+  percent // `value` is a 1..100 percentage off the per-visit subtotal
+  fixed //   `value` is a flat CENTS amount off the per-visit subtotal
+}
+
+// A discount code applied at checkout. The discount is recomputed server-side on
+// POST /bookings (never trust a client-sent amount) and snapshotted onto the
+// Booking as discountAmount (cents). redemptions is incremented when a booking
+// successfully uses the code.
+model PromoCode {
+  id             String    @id @default(cuid())
+  code           String    @unique // stored uppercase; matched case-insensitively
+  description    String?
+  type           PromoType
+  value          Int // percent (1..100) or cents off, per `type`
+  active         Boolean   @default(true)
+  maxRedemptions Int? // null = unlimited
+  redemptions    Int       @default(0)
+  minSubtotal    Int? // cents; the per-visit subtotal must reach this to qualify
+  expiresAt      DateTime? // null = never expires
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  bookings       Booking[]
+
+  @@map("promo_code")
 }
