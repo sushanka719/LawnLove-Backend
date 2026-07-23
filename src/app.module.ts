@@ -19,7 +19,10 @@ import { PricingSettingsModule } from './pricing-settings/pricing-settings.modul
 import { PaymentMethodsModule } from './payment-methods/payment-methods.module';
 import { PayoutModule } from './payout/payout.module';
 import { ProfileModule } from './profile/profile.module';
+import { PromoModule } from './promo/promo.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
+import { ServicesModule } from './services/services.module';
+import { SettingsModule } from './settings/settings.module';
 import { AppConfigModule } from './config/config.module';
 import { AppConfigService } from './config/config.service';
 import { HealthModule } from './health/health.module';
@@ -48,7 +51,10 @@ import { PrismaModule } from './prisma/prisma.module';
     AdminModule,
     PayoutModule,
     ProfileModule,
+    PromoModule,
     EmployeesModule,
+    ServicesModule,
+    SettingsModule,
     SchedulerModule,
     AuthModule.forRoot({
       auth,

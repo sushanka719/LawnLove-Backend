@@ -12,6 +12,7 @@ import { ListBookingsDto } from './dto/list-bookings.dto';
 import { ESTIMATED_AREA_FACTOR, computeQuote, isOverMaxArea } from './pricing';
 import { polygonAreaSqFt } from './geo';
 import { PricingSettingsService } from '../pricing-settings/pricing-settings.service';
+import { PromoService } from '../promo/promo.service';
 
 type SessionUser = {
   id: string;
@@ -26,6 +27,7 @@ export class BookingService {
     private readonly stripe: StripeService,
     private readonly storage: StorageService,
     private readonly pricingSettings: PricingSettingsService,
+    private readonly promo: PromoService,
   ) {}
 
   // Create a booking for the chosen plan and start its payment. Returns the
@@ -62,6 +64,21 @@ export class BookingService {
       estimatedAreaSqFt,
     );
 
+    // Apply a promo code if provided — recomputed server-side from the code and
+    // the per-visit subtotal (never trust a client-sent discount). The final
+    // amount charged to Stripe is the discounted per-visit total.
+    let promoCodeId: string | null = null;
+    let discountAmount = 0;
+    if (dto.promoCode?.trim()) {
+      const resolved = await this.promo.resolveForBooking(
+        dto.promoCode,
+        totalPerVisit,
+      );
+      promoCodeId = resolved.promoCodeId;
+      discountAmount = resolved.discountAmount;
+    }
+    const chargeAmount = Math.max(0, totalPerVisit - discountAmount);
+
     const customerId = await this.stripe.getOrCreateCustomer(user);
 
     const scheduleDate = new Date(`${dto.date}T00:00:00.000Z`);
@@ -97,7 +114,10 @@ export class BookingService {
           frequency,
           subtotal: Math.round(basePrice / 100),
           discountPct: 0,
-          totalPerVisit: Math.round(totalPerVisit / 100),
+          // Legacy display column (whole dollars) reflects the DISCOUNTED charge.
+          totalPerVisit: Math.round(chargeAmount / 100),
+          promoCodeId,
+          discountAmount,
           scheduleDate,
           timeSlot: dto.timeSlot,
           stripeCustomerId: customerId,
@@ -135,7 +155,7 @@ export class BookingService {
         const sub = await this.stripe.createSubscription({
           customerId,
           productId,
-          unitAmount: totalPerVisit,
+          unitAmount: chargeAmount,
           interval: plan.interval as 'weekly' | 'biweekly' | 'monthly',
           metadata,
         });
@@ -147,7 +167,7 @@ export class BookingService {
       } else {
         const pi = await this.stripe.createPaymentIntent({
           customerId,
-          amount: totalPerVisit,
+          amount: chargeAmount,
           metadata,
         });
         clientSecret = pi.clientSecret;
@@ -156,7 +176,11 @@ export class BookingService {
           data: { stripePaymentIntentId: pi.paymentIntentId },
         });
       }
-      return { bookingId: booking.id, clientSecret, amount: totalPerVisit };
+      // Count the redemption once the charge is set up (best-effort).
+      if (promoCodeId) {
+        await this.promo.incrementRedemption(promoCodeId);
+      }
+      return { bookingId: booking.id, clientSecret, amount: chargeAmount };
     } catch (err) {
       await this.prisma.booking
         .delete({ where: { id: booking.id } })
@@ -343,40 +367,41 @@ export class BookingService {
     };
   }
 
-  // Paginated list of the customer's invoices — one per charged visit (a Job is
-  // charged at completion, so `chargedAt != null` marks a real, billed invoice).
-  // Newest charge first.
+  // Paginated list of the customer's invoices. Prepaid model: a booking is
+  // charged up front (and re-charged each recurring visit via Stripe), so a
+  // billed invoice = a booking with `amountCharged` set by the webhook. MVP:
+  // one invoice row per charged booking, newest first.
   async listInvoices(userId: string, { page, pageSize }: ListBookingsDto) {
     const skip = (page - 1) * pageSize;
+    const where = { userId, amountCharged: { not: null } } as const;
 
     const [rows, total] = await this.prisma.$transaction([
-      this.prisma.job.findMany({
-        where: { booking: { userId }, chargedAt: { not: null } },
-        orderBy: { chargedAt: 'desc' },
+      this.prisma.booking.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
         skip,
         take: pageSize,
         select: {
           id: true,
           status: true,
-          amount: true,
-          completedAt: true,
-          chargedAt: true,
-          booking: { select: { address: true, frequency: true } },
+          frequency: true,
+          address: true,
+          scheduleDate: true,
+          amountCharged: true,
+          createdAt: true,
         },
       }),
-      this.prisma.job.count({
-        where: { booking: { userId }, chargedAt: { not: null } },
-      }),
+      this.prisma.booking.count({ where }),
     ]);
 
-    const items = rows.map((j) => ({
-      jobId: j.id,
-      invoiceNumber: `INV-${j.id.slice(-6).toUpperCase()}`,
-      serviceLabel: bookingServiceLabel(j.booking.frequency),
-      address: j.booking.address,
-      servicedOn: j.completedAt ?? j.chargedAt,
-      amount: j.amount ?? 0,
-      refunded: j.status === 'refunded',
+    const items = rows.map((b) => ({
+      id: b.id,
+      invoiceNumber: `INV-${b.id.slice(-6).toUpperCase()}`,
+      serviceLabel: bookingServiceLabel(b.frequency),
+      address: b.address,
+      servicedOn: b.scheduleDate ?? b.createdAt,
+      amount: b.amountCharged ?? 0,
+      status: b.status,
     }));
 
     return {
