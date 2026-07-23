@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { StripeService } from '../stripe/stripe.service';
 import { bookingReference, bookingServiceLabel } from './booking-format';
 import { CreateBookingDto } from './dto/create-booking.dto';
@@ -22,6 +23,7 @@ export class BookingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stripe: StripeService,
+    private readonly storage: StorageService,
   ) {}
 
   // Create a booking for the chosen plan and start its payment. Returns the
@@ -273,6 +275,14 @@ export class BookingService {
             completedAt: true,
             amount: true,
             review: { select: { rating: true } },
+            // "Completed by": the field-worker who did the visit, falling back
+            // to the agent (business owner) when no employee was assigned.
+            agent: { select: { name: true } },
+            employee: { select: { name: true } },
+            // Before/after proof photos — private-bucket keys, presigned below.
+            photos: {
+              select: { id: true, type: true, takenAt: true, storageKey: true },
+            },
           },
         },
       },
@@ -282,8 +292,41 @@ export class BookingService {
       throw new NotFoundException('Booking not found.');
     }
 
+    // Presign each visit's photos and flatten the "completed by" name so the
+    // customer's Booking Details page can render the results inline in a single
+    // request (mirrors BookingJobsService.getJob's per-job presigning).
+    const jobs = await Promise.all(
+      booking.jobs.map(async (job) => {
+        const photos = await Promise.all(
+          [...job.photos]
+            .sort((a, b) => a.takenAt.getTime() - b.takenAt.getTime())
+            .map(async (photo) => ({
+              id: photo.id,
+              type: photo.type,
+              takenAt: photo.takenAt,
+              url: await this.storage.presignDownload(photo.storageKey),
+            })),
+        );
+        return {
+          id: job.id,
+          status: job.status,
+          visitNumber: job.visitNumber,
+          scheduledDate: job.scheduledDate,
+          completedAt: job.completedAt,
+          amount: job.amount,
+          review: job.review,
+          completedBy: job.employee?.name ?? job.agent?.name ?? null,
+          photos: {
+            before: photos.filter((p) => p.type === 'before'),
+            after: photos.filter((p) => p.type === 'after'),
+          },
+        };
+      }),
+    );
+
     return {
       ...booking,
+      jobs,
       reference: bookingReference(booking.id),
       title: bookingServiceLabel(booking.frequency),
     };

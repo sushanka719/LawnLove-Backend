@@ -7,5 +7,8 @@ import { AddressesService } from './addresses.service';
 @Module({
   controllers: [AddressesController],
   providers: [AddressesService],
+  // Exported so the Stripe webhook can save a booking's address into the
+  // customer's address book once payment succeeds.
+  exports: [AddressesService],
 })
 export class AddressesModule {}
