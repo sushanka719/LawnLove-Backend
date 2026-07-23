@@ -15,6 +15,7 @@ import { AgentModule } from './agent/agent.module';
 import { BookingModule } from './booking/booking.module';
 import { EmployeesModule } from './employees/employees.module';
 import { PlansModule } from './plans/plans.module';
+import { PricingSettingsModule } from './pricing-settings/pricing-settings.module';
 import { PaymentMethodsModule } from './payment-methods/payment-methods.module';
 import { PayoutModule } from './payout/payout.module';
 import { ProfileModule } from './profile/profile.module';
@@ -39,6 +40,7 @@ import { PrismaModule } from './prisma/prisma.module';
     HealthModule,
     BookingModule,
     PlansModule,
+    PricingSettingsModule,
     PaymentMethodsModule,
     AddressesModule,
     AccountModule,

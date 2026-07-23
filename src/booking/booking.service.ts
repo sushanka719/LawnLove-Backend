@@ -9,8 +9,9 @@ import { StripeService } from '../stripe/stripe.service';
 import { bookingReference, bookingServiceLabel } from './booking-format';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { ListBookingsDto } from './dto/list-bookings.dto';
-import { ESTIMATED_AREA_FACTOR, computeQuote } from './pricing';
+import { ESTIMATED_AREA_FACTOR, computeQuote, isOverMaxArea } from './pricing';
 import { polygonAreaSqFt } from './geo';
+import { PricingSettingsService } from '../pricing-settings/pricing-settings.service';
 
 type SessionUser = {
   id: string;
@@ -24,16 +25,17 @@ export class BookingService {
     private readonly prisma: PrismaService,
     private readonly stripe: StripeService,
     private readonly storage: StorageService,
+    private readonly pricingSettings: PricingSettingsService,
   ) {}
 
   // Create a booking for the chosen plan and start its payment. Returns the
   // Stripe client secret the embedded Payment Element confirms against — the
   // customer is charged now (prepaid). The webhook flips the booking to active.
   async createBooking(user: SessionUser, dto: CreateBookingDto) {
-    // Load the chosen plan (+ its area tiers). Reject unknown/inactive plans.
+    // Load the chosen plan. Reject unknown/inactive plans. The area surcharge
+    // ladder + the maximum serviceable area are global now (PricingSettings).
     const plan = await this.prisma.plan.findUnique({
       where: { id: dto.planId },
-      include: { areaTiers: true },
     });
     if (!plan || !plan.active) {
       throw new BadRequestException('The selected plan is unavailable.');
@@ -42,16 +44,25 @@ export class BookingService {
       throw new BadRequestException('The selected plan is misconfigured.');
     }
 
-    const customerId = await this.stripe.getOrCreateCustomer(user);
-
     // Recompute area + amount server-side; never trust client-sent prices. All
-    // amounts are in CENTS.
+    // amounts are in CENTS. Block lawns beyond the global maximum serviceable
+    // area before touching Stripe, so we never create a dangling customer.
     const areaSqFt = Math.round(polygonAreaSqFt(dto.boundary));
     const estimatedAreaSqFt = Math.round(areaSqFt * ESTIMATED_AREA_FACTOR);
+
+    const pricing = await this.pricingSettings.getConfigForQuote();
+    if (isOverMaxArea(pricing.maxAreaSqFt, estimatedAreaSqFt)) {
+      throw new BadRequestException(
+        'This lawn is larger than the area we currently service. Please contact us for a custom quote.',
+      );
+    }
     const { basePrice, areaSurcharge, totalPerVisit } = computeQuote(
-      plan,
+      plan.basePrice,
+      pricing.areaTiers,
       estimatedAreaSqFt,
     );
+
+    const customerId = await this.stripe.getOrCreateCustomer(user);
 
     const scheduleDate = new Date(`${dto.date}T00:00:00.000Z`);
     if (Number.isNaN(scheduleDate.getTime())) {
