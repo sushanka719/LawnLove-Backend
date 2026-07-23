@@ -11,6 +11,7 @@ import {
 import { Public } from '@thallesp/nestjs-better-auth';
 import type { Request } from 'express';
 import type Stripe from 'stripe';
+import { AddressesService } from '../addresses/addresses.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SchedulerService } from '../scheduler/scheduler.service';
 import { StripeService } from './stripe.service';
@@ -26,6 +27,7 @@ export class StripeWebhookController {
     private readonly prisma: PrismaService,
     private readonly stripe: StripeService,
     private readonly scheduler: SchedulerService,
+    private readonly addresses: AddressesService,
   ) {}
 
   @Public()
@@ -139,6 +141,7 @@ export class StripeWebhookController {
     // webhook or a mid-cycle renewal invoice leaves the count at 0 and no-ops.
     if (result.count > 0) {
       await this.assignFirstVisit(bookingId);
+      await this.saveBookingAddress(bookingId);
     }
   }
 
@@ -164,6 +167,7 @@ export class StripeWebhookController {
     });
     for (const booking of activating) {
       await this.assignFirstVisit(booking.id);
+      await this.saveBookingAddress(booking.id);
     }
   }
 
@@ -183,6 +187,33 @@ export class StripeWebhookController {
     } catch (err) {
       this.logger.error(
         `Failed to assign first visit for booking ${bookingId}`,
+        err as Error,
+      );
+    }
+  }
+
+  // Save the paid booking's address into the customer's reusable address book,
+  // so a completed booking (and only a completed one) makes that address
+  // pickable next time. Runs only on the transition to active, so abandoned
+  // pendingPayment bookings never leak an address. Deduped in
+  // AddressesService.saveFromBooking, so re-booking the same place is a no-op.
+  // Best-effort like assignFirstVisit — a hiccup here must never fail the
+  // webhook (that would make Stripe retry an already-activated booking).
+  private async saveBookingAddress(bookingId: string) {
+    try {
+      const booking = await this.prisma.booking.findUnique({
+        where: { id: bookingId },
+        select: { userId: true, address: true, lat: true, lng: true },
+      });
+      if (!booking) return;
+      await this.addresses.saveFromBooking(booking.userId, {
+        address: booking.address,
+        lat: booking.lat,
+        lng: booking.lng,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to save booking address for booking ${bookingId}`,
         err as Error,
       );
     }
