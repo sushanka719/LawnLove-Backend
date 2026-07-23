@@ -4,12 +4,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { StripeService } from '../stripe/stripe.service';
 import { bookingReference, bookingServiceLabel } from './booking-format';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { ListBookingsDto } from './dto/list-bookings.dto';
-import { ESTIMATED_AREA_FACTOR, computeQuote } from './pricing';
+import { ESTIMATED_AREA_FACTOR, computeQuote, isOverMaxArea } from './pricing';
 import { polygonAreaSqFt } from './geo';
+import { PricingSettingsService } from '../pricing-settings/pricing-settings.service';
 
 type SessionUser = {
   id: string;
@@ -22,16 +24,18 @@ export class BookingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stripe: StripeService,
+    private readonly storage: StorageService,
+    private readonly pricingSettings: PricingSettingsService,
   ) {}
 
   // Create a booking for the chosen plan and start its payment. Returns the
   // Stripe client secret the embedded Payment Element confirms against — the
   // customer is charged now (prepaid). The webhook flips the booking to active.
   async createBooking(user: SessionUser, dto: CreateBookingDto) {
-    // Load the chosen plan (+ its area tiers). Reject unknown/inactive plans.
+    // Load the chosen plan. Reject unknown/inactive plans. The area surcharge
+    // ladder + the maximum serviceable area are global now (PricingSettings).
     const plan = await this.prisma.plan.findUnique({
       where: { id: dto.planId },
-      include: { areaTiers: true },
     });
     if (!plan || !plan.active) {
       throw new BadRequestException('The selected plan is unavailable.');
@@ -40,16 +44,25 @@ export class BookingService {
       throw new BadRequestException('The selected plan is misconfigured.');
     }
 
-    const customerId = await this.stripe.getOrCreateCustomer(user);
-
     // Recompute area + amount server-side; never trust client-sent prices. All
-    // amounts are in CENTS.
+    // amounts are in CENTS. Block lawns beyond the global maximum serviceable
+    // area before touching Stripe, so we never create a dangling customer.
     const areaSqFt = Math.round(polygonAreaSqFt(dto.boundary));
     const estimatedAreaSqFt = Math.round(areaSqFt * ESTIMATED_AREA_FACTOR);
+
+    const pricing = await this.pricingSettings.getConfigForQuote();
+    if (isOverMaxArea(pricing.maxAreaSqFt, estimatedAreaSqFt)) {
+      throw new BadRequestException(
+        'This lawn is larger than the area we currently service. Please contact us for a custom quote.',
+      );
+    }
     const { basePrice, areaSurcharge, totalPerVisit } = computeQuote(
-      plan,
+      plan.basePrice,
+      pricing.areaTiers,
       estimatedAreaSqFt,
     );
+
+    const customerId = await this.stripe.getOrCreateCustomer(user);
 
     const scheduleDate = new Date(`${dto.date}T00:00:00.000Z`);
     if (Number.isNaN(scheduleDate.getTime())) {
@@ -93,8 +106,16 @@ export class BookingService {
         select: { id: true },
       });
 
+      // Visit #1 — dated from the customer's chosen date. An employee is picked
+      // by the scheduler once payment lands (see the Stripe webhook); recurring
+      // bookings get visits #2+ from the daily rolling-window cron.
       await tx.job.create({
-        data: { bookingId: created.id, status: 'assigned' },
+        data: {
+          bookingId: created.id,
+          visitNumber: 1,
+          scheduledDate: scheduleDate,
+          status: 'assigned',
+        },
       });
 
       return created;
@@ -256,13 +277,23 @@ export class BookingService {
         status: true,
         createdAt: true,
         jobs: {
-          orderBy: { createdAt: 'desc' },
+          orderBy: { visitNumber: 'asc' },
           select: {
             id: true,
             status: true,
+            visitNumber: true,
+            scheduledDate: true,
             completedAt: true,
             amount: true,
             review: { select: { rating: true } },
+            // "Completed by": the field-worker who did the visit, falling back
+            // to the agent (business owner) when no employee was assigned.
+            agent: { select: { name: true } },
+            employee: { select: { name: true } },
+            // Before/after proof photos — private-bucket keys, presigned below.
+            photos: {
+              select: { id: true, type: true, takenAt: true, storageKey: true },
+            },
           },
         },
       },
@@ -272,8 +303,41 @@ export class BookingService {
       throw new NotFoundException('Booking not found.');
     }
 
+    // Presign each visit's photos and flatten the "completed by" name so the
+    // customer's Booking Details page can render the results inline in a single
+    // request (mirrors BookingJobsService.getJob's per-job presigning).
+    const jobs = await Promise.all(
+      booking.jobs.map(async (job) => {
+        const photos = await Promise.all(
+          [...job.photos]
+            .sort((a, b) => a.takenAt.getTime() - b.takenAt.getTime())
+            .map(async (photo) => ({
+              id: photo.id,
+              type: photo.type,
+              takenAt: photo.takenAt,
+              url: await this.storage.presignDownload(photo.storageKey),
+            })),
+        );
+        return {
+          id: job.id,
+          status: job.status,
+          visitNumber: job.visitNumber,
+          scheduledDate: job.scheduledDate,
+          completedAt: job.completedAt,
+          amount: job.amount,
+          review: job.review,
+          completedBy: job.employee?.name ?? job.agent?.name ?? null,
+          photos: {
+            before: photos.filter((p) => p.type === 'before'),
+            after: photos.filter((p) => p.type === 'after'),
+          },
+        };
+      }),
+    );
+
     return {
       ...booking,
+      jobs,
       reference: bookingReference(booking.id),
       title: bookingServiceLabel(booking.frequency),
     };

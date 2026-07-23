@@ -45,6 +45,32 @@ export class AddressesService {
     return created;
   }
 
+  // Called when a booking's payment succeeds: persist the address the customer
+  // just booked with into their reusable address book so they can pick it next
+  // time. Idempotent — if they already have a saved address with the same text
+  // (they picked an existing one, or re-booked the same place), it's a no-op, so
+  // completing repeat bookings never spawns duplicates. Reuses `create`, so the
+  // user's first-ever saved address still becomes their default.
+  async saveFromBooking(
+    userId: string,
+    input: { address: string; lat: number | null; lng: number | null },
+  ) {
+    const address = input.address.trim();
+    if (!address) return null;
+
+    const existing = await this.prisma.savedAddress.findFirst({
+      where: { userId, address: { equals: address, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (existing) return existing;
+
+    return this.create(userId, {
+      address,
+      lat: input.lat ?? undefined,
+      lng: input.lng ?? undefined,
+    });
+  }
+
   async update(userId: string, id: string, dto: UpdateAddressDto) {
     await this.assertOwned(userId, id);
 
